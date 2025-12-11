@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="https://capsule-render.vercel.app/api?type=rect&color=24a19c&height=300&section=header&text=차선 감지 및 분석 시스템&fontSize=80&fontColor=ffffff&fontAlign=center" alt="AI 기반 실시간 차량/차선 감지 및 분석 시스템">
+  <img src="https://capsule-render.vercel.app/api?type=rect&color=24a19c&height=300&section=header&text=차선 감지 및 분석 시스템&fontSize=80&fontColor=ffffff&fontAlign=center" alt="차선 감지 및 분석 시스템">
 </h1>
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
