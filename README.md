@@ -47,58 +47,26 @@
 | **백엔드 & 핵심 알고리즘 개발** | 3명 (팀원 A, B, C) |
 
 ---
-
 ## 👥 팀 소개
 
-<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 20px;">
-    
-    <div style="flex: 1 1 45%; border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px; box-shadow: 2px 2px 5px rgba(0,0,0,0.05);">
-        <h3 style="margin-top: 0;"><img src="https://img.shields.io/badge/Pin-E83E8C?style=flat-square&logo=pinboard&logoColor=white" alt="Pin"/> 최준영 (👑PM)</h3>
-        <div style="border: 1px dashed #cccccc; padding: 40px; margin-bottom: 15px; text-align: center; color: #888;">[프로필 이미지 링크]</div>
-        <ul style="padding-left: 20px;">
-            <li>**담당**: UX/UI & 프론트엔드</li>
-            <li>**이메일**: junyoung@example.com</li>
-            <li>**깃허브 아이디 (레포지토리 링크)**: [jychannel](https://github.com/jychannel)</li>
-            <li>**자유롭게 소개**: 사용자 경험을 설계하고 프론트엔드 개발을 담당합니다.</li>
-        </ul>
-    </div>
+| 📌 최준영 (👑PM) | 📌 팀원 A |
+| :---: | :---: |
+| <img src="[최준영 프로필 이미지 링크]" alt="최준영 프로필" width="150"/> | <img src="[팀원 A 프로필 이미지 링크]" alt="팀원 A 프로필" width="150"/> |
+| **담당**: UX/UI & 프론트엔드 | **담당**: 백엔드 & 핵심 알고리즘 개발 |
+| **이메일**: junyoung@example.com | **이메일**: teamA@example.com |
+| **GitHub**: [jychannel](https://github.com/jychannel) | **GitHub**: [teamA-id](https://github.com/teamA-id) |
+| *사용자 경험을 설계하고 프론트엔드 개발을 담당합니다.* | *차량 감지 및 분석 알고리즘 구현을 담당합니다.* |
 
-    <div style="flex: 1 1 45%; border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px; box-shadow: 2px 2px 5px rgba(0,0,0,0.05);">
-        <h3 style="margin-top: 0;"><img src="https://img.shields.io/badge/Pin-E83E8C?style=flat-square&logo=pinboard&logoColor=white" alt="Pin"/> 팀원 A</h3>
-        <div style="border: 1px dashed #cccccc; padding: 40px; margin-bottom: 15px; text-align: center; color: #888;">[프로필 이미지 링크]</div>
-        <ul style="padding-left: 20px;">
-            <li>**담당**: 백엔드 & 핵심 알고리즘 개발</li>
-            <li>**이메일**: teamA@example.com</li>
-            <li>**깃허브 아이디 (레포지토리 링크)**: [teamA-id](https://github.com/teamA-id)</li>
-            <li>**자유롭게 소개**: 차량 감지 및 분석 알고리즘 구현을 담당합니다.</li>
-        </ul>
-    </div>
-    
-    <div style="flex: 1 1 45%; border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px; box-shadow: 2px 2px 5px rgba(0,0,0,0.05);">
-        <h3 style="margin-top: 0;"><img src="https://img.shields.io/badge/Pin-E83E8C?style=flat-square&logo=pinboard&logoColor=white" alt="Pin"/> 팀원 B</h3>
-        <div style="border: 1px dashed #cccccc; padding: 40px; margin-bottom: 15px; text-align: center; color: #888;">[프로필 이미지 링크]</div>
-        <ul style="padding-left: 20px;">
-            <li>**담당**: 백엔드 & 핵심 알고리즘 개발</li>
-            <li>**이메일**: teamB@example.com</li>
-            <li>**깃허브 아이디 (레포지토리 링크)**: [teamB-id](https://github.com/teamB-id)</li>
-            <li>**자유롭게 소개**: 시스템 통합 및 데이터 처리를 담당합니다.</li>
-        </ul>
-    </div>
-    
-    <div style="flex: 1 1 45%; border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px; box-shadow: 2px 2px 5px rgba(0,0,0,0.05);">
-        <h3 style="margin-top: 0;"><img src="https://img.shields.io/badge/Pin-E83E8C?style=flat-square&logo=pinboard&logoColor=white" alt="Pin"/> 팀원 C</h3>
-        <div style="border: 1px dashed #cccccc; padding: 40px; margin-bottom: 15px; text-align: center; color: #888;">[프로필 이미지 링크]</div>
-        <ul style="padding-left: 20px;">
-            <li>**담당**: 백엔드 & 핵심 알고리즘 개발</li>
-            <li>**이메일**: teamC@example.com</li>
-            <li>**깃허브 아이디 (레포지토리 링크)**: [teamC-id](https://github.com/teamC-id)</li>
-            <li>**자유롭게 소개**: 딥러닝 모델 최적화 및 테스트를 담당합니다.</li>
-        </ul>
-    </div>
-    
-</div>
+| 📌 팀원 B | 📌 팀원 C |
+| :---: | :---: |
+| <img src="[팀원 B 프로필 이미지 링크]" alt="팀원 B 프로필" width="150"/> | <img src="[팀원 C 프로필 이미지 링크]" alt="팀원 C 프로필" width="150"/> |
+| **담당**: 백엔드 & 핵심 알고리즘 개발 | **담당**: 백엔드 & 핵심 알고리즘 개발 |
+| **이메일**: teamB@example.com | **이메일**: teamC@example.com |
+| **GitHub**: [teamB-id](https://github.com/teamB-id) | **GitHub**: [teamC-id](https://github.com/teamC-id) |
+| *시스템 통합 및 데이터 처리를 담당합니다.* | *딥러닝 모델 최적화 및 테스트를 담당합니다.* |
 
 ---
+
 
 ## 🚀 시작하는 방법 (Getting Started)
 
