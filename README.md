@@ -2,11 +2,6 @@
   <img src="https://img.shields.io/badge/AI%20기반%20실시간%20차량%2F차선%20감지%20및%20분석%20시스템-24A19C?style=for-the-badge&logo=github&logoColor=white&labelColor=1F2328" alt="프로젝트명 배너" width="1600">
 </h1>
 
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/YOUR_GITHUB_ID/YOUR_REPO_NAME?style=social)](https://github.com/YOUR_GITHUB_ID/YOUR_REPO_NAME/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/YOUR_GITHUB_ID/YOUR_REPO_NAME?style=social)](https://github.com/YOUR_GITHUB_ID/YOUR_REPO_NAME/network/members)
-
 ## 📌 프로젝트 소개 (Project Introduction)
 
 본 프로젝트는 카메라 영상을 기반으로 실시간으로 도로 상황을 분석하는 **지능형 교통 시스템(ITS)** 구축을 목표로 합니다. 고속도로 및 일반 도로에서 발생하는 다양한 차량 데이터를 딥러닝 기술을 활용하여 수집 및 분석함으로써 안전하고 효율적인 교통 관리에 기여합니다.
