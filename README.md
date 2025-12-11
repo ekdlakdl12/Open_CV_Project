@@ -97,3 +97,16 @@
     </div>
     
 </div>
+
+---
+
+## 🚀 시작하는 방법 (Getting Started)
+
+프로젝트를 로컬 환경에 설정하고 실행하는 방법을 안내합니다.
+
+### 1. 저장소 클론
+
+```bash
+# GitHub 저장소 클론
+git clone [YOUR_REPOSITORY_URL]
+cd [PROJECT_NAME]
