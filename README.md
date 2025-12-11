@@ -1,10 +1,10 @@
 <h1 align="center">
-  <img src="https://capsule-render.vercel.app/api?type=rect&color=24a19c&height=300&section=header&text=AI 기반 실시간 차량/차선 감지 및 분석 시스템&fontSize=100&fontColor=ffffff&fontAlign=center" alt="AI 기반 실시간 차량/차선 감지 및 분석 시스템 Header">
+  <img src="https://capsule-render.vercel.app/api?type=rect&color=24a19c&height=300&section=header&text=AI 기반 실시간 차량/차선 감지 및 분석 시스템&fontSize=80&fontColor=ffffff&fontAlign=center" alt="AI 기반 실시간 차량/차선 감지 및 분석 시스템">
 </h1>
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/YOUR_GITHUB_ID/YOUR_REPO_NAME?style=social)](https://github.com/YOUR_GITHUB_ID/YOUR_REPO_NAME)
-[![GitHub forks](https://img.shields.io/github/forks/YOUR_GITHUB_ID/YOUR_REPO_NAME?style=social)](https://github.com/YOUR_GITHUB_ID/YOUR_REPO_NAME)
+[![GitHub stars](https://img.shields.io/github/stars/YOUR_GITHUB_ID/YOUR_REPO_NAME?style=social)](https://github.com/YOUR_GITHUB_ID/YOUR_REPO_NAME/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/YOUR_GITHUB_ID/YOUR_REPO_NAME?style=social)](https://github.com/YOUR_GITHUB_ID/YOUR_REPO_NAME/network/members)
 
 ## 📌 프로젝트 소개 (Project Introduction)
 
@@ -59,8 +59,6 @@
 ---
 
 ## 🚀 시작하는 방법 (Getting Started)
-
-프로젝트를 로컬 환경에 설정하고 실행하는 방법을 안내합니다.
 
 ### 1. 저장소 클론
 
