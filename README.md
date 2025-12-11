@@ -1,6 +1,10 @@
 <h1 align="center">
-  <img src="https://img.shields.io/badge/AI%20기반%20실시간%20차량%2F차선%20감지%20및%20분석%20시스템-24A19C?style=for-the-badge&logo=github&logoColor=white&labelColor=1F2328" alt="프로젝트명 배너" width="1600">
+  <img src="https://capsule-render.vercel.app/api?type=rect&color=24a19c&height=300&section=header&text=AI 기반 실시간 차량/차선 감지 및 분석 시스템&fontSize=80&fontColor=ffffff&fontAlign=center" alt="AI 기반 실시간 차량/차선 감지 및 분석 시스템">
 </h1>
+
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/YOUR_GITHUB_ID/YOUR_REPO_NAME?style=social)](https://github.com/YOUR_GITHUB_ID/YOUR_REPO_NAME/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/YOUR_GITHUB_ID/YOUR_REPO_NAME?style=social)](https://github.com/YOUR_GITHUB_ID/YOUR_REPO_NAME/network/members)
 
 ## 📌 프로젝트 소개 (Project Introduction)
 
@@ -37,20 +41,21 @@
 
 | 역할 (Role) | 담당자 (Member) |
 | :--- | :--- |
-| **UX/UI & 프론트엔드** | 최준영 |
-| **백엔드 & 핵심 알고리즘 개발** | 2명 (팀원 A, B) |
+| **팀장 (PM)** | 이름 없음 |
+| **팀원** | 김준형 |
+| **팀원** | 팀원 B |
 
 ---
 
 ## 👥 팀 소개
 
-| 📌 최준영 (👑PM) | 📌 팀원 A | 📌 팀원 B |
+| 📌 팀장 (👑PM) | 📌 김준형 | 📌 팀원 B |
 | :---: | :---: | :---: |
-| <img src="[최준영 프로필 이미지 링크]" alt="최준영 프로필" width="150"/> | <img src="[팀원 A 프로필 이미지 링크]" alt="팀원 A 프로필" width="150"/> | <img src="[팀원 B 프로필 이미지 링크]" alt="팀원 B 프로필" width="150"/> |
-| **담당**: UX/UI & 프론트엔드 | **담당**: 백엔드 & 핵심 알고리즘 개발 | **담당**: 백엔드 & 핵심 알고리즘 개발 |
-| **이메일**: junyoung@example.com | **이메일**: teamA@example.com | **이메일**: teamB@example.com |
-| **GitHub**: [jychannel](https://github.com/jychannel) | **GitHub**: [teamA-id](https://github.com/teamA-id) | **GitHub**: [teamB-id](https://github.com/teamB-id) |
-| *사용자 경험 설계 및 프론트엔드 담당* | *차량 감지 및 분석 알고리즘 구현 담당* | *시스템 통합 및 데이터 처리 담당* |
+| <img src="[팀장 프로필 이미지 링크]" alt="팀장 프로필" width="150"/> | <img src="[김준형 프로필 이미지 링크]" alt="김준형 프로필" width="150"/> | <img src="[팀원 B 프로필 이미지 링크]" alt="팀원 B 프로필" width="150"/> |
+| **담당**: 팀장 | **담당**: 팀원 | **담당**: 백엔드 & 핵심 알고리즘 개발 |
+| **이메일**: rkfflffpdh12@gmail.com | **이메일**: 916kimjh@naver.com | **이메일**: teamB@example.com |
+| **GitHub**: [ekdlakdl12](https://github.com/ekdlakdl12/Open_CV_Project) | **GitHub**: [Kim-Junghyeong](https://github.com/Kim-Junghyeong?tab=repositories) | **GitHub**: [teamB-id](https://github.com/teamB-id) |
+| *태어난 김에 사는 개발자.* | *고속도로의 평화 지키미.* | *시스템 통합 및 데이터 처리 담당* |
 
 ---
 
