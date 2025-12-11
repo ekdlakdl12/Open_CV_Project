@@ -1,7 +1,7 @@
 <h1 align="center">
-  <img src="https://capsule-render.vercel.app/api?type=rect&color=24a19c&height=300&section=header&text=AI 기반 실시간 차량/차선 감지 및 분석 시스템&fontSize=100&fontColor=ffffff&fontAlign=center" alt="Valley-Tales Header">
+  <img src="https://capsule-render.vercel.app/api?type=rect&color=24a19c&height=300&section=header&text=AI 기반 실시간 차량/차선 감지 및 분석 시스템&fontSize=100&fontColor=ffffff&fontAlign=center" alt="AI 기반 실시간 차량/차선 감지 및 분석 시스템 Header">
 </h1>
-<div align="center">
+
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/YOUR_GITHUB_ID/YOUR_REPO_NAME?style=social)](https://github.com/YOUR_GITHUB_ID/YOUR_REPO_NAME)
 [![GitHub forks](https://img.shields.io/github/forks/YOUR_GITHUB_ID/YOUR_REPO_NAME?style=social)](https://github.com/YOUR_GITHUB_ID/YOUR_REPO_NAME)
@@ -46,11 +46,10 @@
 | 역할 (Role) | 담당자 (Member) |
 | :--- | :--- |
 | **UX/UI & 프론트엔드** | 최준영 |
-| **백엔드 & 핵심 알고리즘 개발** | 3명 (팀원 A, B) |
+| **백엔드 & 핵심 알고리즘 개발** | 2명 (팀원 A, B) |
 
 ---
 
----
 ## 👥 팀 소개
 
 | 📌 최준영 (👑PM) | 📌 팀원 A | 📌 팀원 B |
@@ -62,7 +61,6 @@
 | *사용자 경험 설계 및 프론트엔드 담당* | *차량 감지 및 분석 알고리즘 구현 담당* | *시스템 통합 및 데이터 처리 담당* |
 
 ---
-
 
 ## 🚀 시작하는 방법 (Getting Started)
 
