@@ -1,5 +1,7 @@
-# 🛣️ AI 기반 실시간 차량/차선 감지 및 분석 시스템
-
+<h1 align="center">
+  <img src="https://capsule-render.vercel.app/api?type=rect&color=24a19c&height=300&section=header&text=AI 기반 실시간 차량/차선 감지 및 분석 시스템&fontSize=100&fontColor=ffffff&fontAlign=center" alt="Valley-Tales Header">
+</h1>
+<div align="center">
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/YOUR_GITHUB_ID/YOUR_REPO_NAME?style=social)](https://github.com/YOUR_GITHUB_ID/YOUR_REPO_NAME)
 [![GitHub forks](https://img.shields.io/github/forks/YOUR_GITHUB_ID/YOUR_REPO_NAME?style=social)](https://github.com/YOUR_GITHUB_ID/YOUR_REPO_NAME)
