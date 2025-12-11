@@ -1,10 +1,8 @@
 <h1 align="center">
-  <img src="https://capsule-render.vercel.app/api?type=rect&color=24a19c&height=300&section=header&text=AI 기반 실시간 차량/차선 감지 및 분석 시스템&fontSize=80&fontColor=ffffff&fontAlign=center" alt="AI 기반 실시간 차량/차선 감지 및 분석 시스템">
+  <img src="https://img.shields.io/badge/AI%20기반%20실시간%20차량%2F차선%20감지%20및%20분석%20시스템-24A19C?style=for-the-badge&logo=github&logoColor=white&labelColor=1F2328" alt="프로젝트명 배너" width="1600">
 </h1>
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/YOUR_GITHUB_ID/YOUR_REPO_NAME?style=social)](https://github.com/YOUR_GITHUB_ID/YOUR_REPO_NAME/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/YOUR_GITHUB_ID/YOUR_REPO_NAME?style=social)](https://github.com/YOUR_GITHUB_ID/YOUR_REPO_NAME/network/members)
 
 ## 📌 프로젝트 소개 (Project Introduction)
 
