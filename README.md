@@ -47,6 +47,8 @@
 | **백엔드 & 핵심 알고리즘 개발** | 3명 (팀원 A, B, C) |
 
 ---
+
+---
 ## 👥 팀 소개
 
 | 📌 최준영 (👑PM) | 📌 팀원 A |
@@ -57,13 +59,13 @@
 | **GitHub**: [jychannel](https://github.com/jychannel) | **GitHub**: [teamA-id](https://github.com/teamA-id) |
 | *사용자 경험을 설계하고 프론트엔드 개발을 담당합니다.* | *차량 감지 및 분석 알고리즘 구현을 담당합니다.* |
 
-| 📌 팀원 B | 📌 팀원 C |
+| 📌 팀원 B | |
 | :---: | :---: |
-| <img src="[팀원 B 프로필 이미지 링크]" alt="팀원 B 프로필" width="150"/> | <img src="[팀원 C 프로필 이미지 링크]" alt="팀원 C 프로필" width="150"/> |
-| **담당**: 백엔드 & 핵심 알고리즘 개발 | **담당**: 백엔드 & 핵심 알고리즘 개발 |
-| **이메일**: teamB@example.com | **이메일**: teamC@example.com |
-| **GitHub**: [teamB-id](https://github.com/teamB-id) | **GitHub**: [teamC-id](https://github.com/teamC-id) |
-| *시스템 통합 및 데이터 처리를 담당합니다.* | *딥러닝 모델 최적화 및 테스트를 담당합니다.* |
+| <img src="[팀원 B 프로필 이미지 링크]" alt="팀원 B 프로필" width="150"/> | |
+| **담당**: 백엔드 & 핵심 알고리즘 개발 | |
+| **이메일**: teamB@example.com | |
+| **GitHub**: [teamB-id](https://github.com/teamB-id) | |
+| *시스템 통합 및 데이터 처리를 담당합니다.* | |
 
 ---
 
