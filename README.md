@@ -47,7 +47,7 @@
 
 | 📌 팀장 (👑PM) | 📌 김준형 | 📌 팀원 B |
 | :---: | :---: | :---: |
-| <img src="https://cafe.daum.net/subdued20club/Uzjo/20485" alt="팀장 프로필" width="150"/> | <img src="[김준형 프로필 이미지 링크]" alt="김준형 프로필" width="150"/> | <img src="[팀원 B 프로필 이미지 링크]" alt="팀원 B 프로필" width="150"/> |
+| <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTlvx9kKgphtqxjtyo02-hkg1Vc3retA_F-Ow&s" alt="팀장 프로필" width="150"/> | <img src="[김준형 프로필 이미지 링크]" alt="김준형 프로필" width="150"/> | <img src="[팀원 B 프로필 이미지 링크]" alt="팀원 B 프로필" width="150"/> |
 | **담당**: 팀장 | **담당**: 팀원 | **담당**: 백엔드 & 핵심 알고리즘 개발 |
 | **이메일**: rkfflffpdh12@gmail.com | **이메일**: 916kimjh@naver.com | **이메일**: teamB@example.com |
 | **GitHub**: [ekdlakdl12](https://github.com/ekdlakdl12/Open_CV_Project) | **GitHub**: [Kim-Junghyeong](https://github.com/Kim-Junghyeong?tab=repositories) | **GitHub**: [teamB-id](https://github.com/teamB-id) |
