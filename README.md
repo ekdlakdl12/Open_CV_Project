@@ -38,15 +38,15 @@
 
 | 역할 (Role) | 담당자 (Member) |
 | :--- | :--- |
-| **팀장 (PM)** | 이름 없음 |
+| **팀장 (PM)** | 최준영 |
 | **팀원** | 김준형 |
-| **팀원** | 팀원 B |
+| **팀원** | 김진우 |
 
 ---
 
 ## 👥 팀 소개
 
-| 📌 팀장 (👑PM) | 📌 김준형 | 📌 팀원 B |
+| 📌 팀장 (👑PM) 최준영 | 📌 김준형 | 📌 김진우 |
 | :---: | :---: | :---: |
 | <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTlvx9kKgphtqxjtyo02-hkg1Vc3retA_F-Ow&s" alt="팀장 프로필" width="150"/> | <img src="https://i.pinimg.com/736x/cd/29/5b/cd295b740eb04c3ec4acdd6cb4f11f47.jpg" alt="김준형 프로필" width="150"/> | <img src="" alt="팀원 프로필" width="150"/> |
 | **담당**: 팀장 | **담당**: 팀원 | **담당**: 백엔드 & 핵심 알고리즘 개발 |
