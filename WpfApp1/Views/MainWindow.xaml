@@ -22,6 +22,7 @@
             <Button x:Name="SelectVideoButton" Content="영상 파일 선택" 
                     Width="150" Height="30" Margin="0,0,10,0"
                     Click="SelectVideoButton_Click"/>
+
             <TextBox Text="{Binding SelectedVideoPath}" IsReadOnly="True" 
                      Width="450" Height="30" VerticalContentAlignment="Center"
                      Background="#F0F0F0" ToolTip="{Binding SelectedVideoPath}"/>
@@ -43,16 +44,25 @@
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
-            <Border Grid.Column="0" BorderBrush="Gray" BorderThickness="1" Margin="0,0,10,0" 
-                    Background="#222">
-                <TextBlock Text="[영상 미리보기 영역]" Foreground="White" 
-                           VerticalAlignment="Center" HorizontalAlignment="Center" FontSize="18"/>
-            </Border>
+            <Grid Grid.Column="0" Margin="0,0,10,0">
 
+                <MediaElement x:Name="VideoPlayer" 
+                              Source="{Binding SelectedVideoPath}" 
+                              LoadedBehavior="Manual" 
+                              Stretch="Uniform" 
+                              MediaOpened="VideoPlayer_MediaOpened"/>
+
+                <Canvas x:Name="BoundingBoxCanvas" 
+                        Background="Transparent"
+                        Margin="0"/>
+
+                <TextBlock Text="영상을 선택하거나 분석을 시작해 주세요." 
+                           Foreground="White" 
+                           VerticalAlignment="Center" HorizontalAlignment="Center" FontSize="18"
+                           Visibility="{Binding IsProcessing, Converter={StaticResource BooleanToVisibilityConverter}, ConverterParameter=Inverse}"/>
+            </Grid>
             <StackPanel Grid.Column="1" Margin="10,0,0,0">
-
                 <TextBlock Text="🏆 최다 인식 객체 (Top 3)" FontWeight="Bold" Margin="0,0,0,5" FontSize="14"/>
-
                 <ItemsControl ItemsSource="{Binding TopThreeResults}" Margin="0,0,0,10">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>

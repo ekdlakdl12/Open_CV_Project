@@ -8,12 +8,18 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
 using WpfApp1.Models;
+using System.Windows;
+using System.Collections.Generic;
+using System.ComponentModel; // INotifyPropertyChanged 구현을 위해 추가
+using System.Runtime.CompilerServices; // CallerMemberName 사용을 위해 추가
 
 namespace WpfApp1.ViewModels
 {
-    public class MainWindowViewModel : ObservableObject
+    // 기존 프로젝트의 ObservableObject를 상속받도록 가정합니다.
+    public class MainWindowViewModel : ObservableObject // (ObservableObject는 별도의 파일/위치에 존재해야 합니다.)
     {
         // --- Private Fields ---
+        private Process _process;
         private CancellationTokenSource _cancellationTokenSource;
         private string _selectedVideoPath;
         private string _statusMessage;
@@ -22,6 +28,9 @@ namespace WpfApp1.ViewModels
         // --- Collections ---
         private ObservableCollection<DetectedObject> _detectionResults;
         private ObservableCollection<DetectedObject> _topThreeResults;
+
+        // [핵심 추가] View로 바운딩 박스 데이터를 전달할 Action (ViewModel <-> View 통신)
+        public Action<string> DrawingCommandReceived;
 
         // --- Public Properties (Data Binding Target) ---
         public string SelectedVideoPath
@@ -64,6 +73,7 @@ namespace WpfApp1.ViewModels
         {
             DetectionResults = new ObservableCollection<DetectedObject>();
             TopThreeResults = new ObservableCollection<DetectedObject>();
+            _cancellationTokenSource = new CancellationTokenSource();
 
             // [테스트 경로] 실제 테스트 영상 파일 경로로 수정하세요.
             string testPath = @"C:\Users\Public\Videos\Sample\test_highway.mp4";
@@ -77,7 +87,7 @@ namespace WpfApp1.ViewModels
                 StatusMessage = "영상을 선택해 주세요. (테스트 경로 설정 필요)";
             }
 
-            // 명령어 초기화
+            // 명령어 초기화 (RelayCommand는 별도 파일/위치에 존재해야 합니다.)
             SelectVideoCommand = new RelayCommand(ExecuteSelectVideo);
             ProcessVideoCommand = new RelayCommand(ExecuteProcessVideo, CanExecuteProcessVideo);
             CancelProcessCommand = new RelayCommand(ExecuteCancelProcess, CanExecuteCancelProcess);
@@ -108,121 +118,174 @@ namespace WpfApp1.ViewModels
 
         private void ExecuteCancelProcess(object parameter)
         {
-            if (_cancellationTokenSource != null)
+            if (_process != null && !_process.HasExited)
             {
-                _cancellationTokenSource.Cancel();
-                StatusMessage = "분석 취소 요청 중...";
+                // 프로세스 강제 종료
+                try
+                {
+                    _cancellationTokenSource?.Cancel();
+                    _process.Kill();
+                    _process.WaitForExit(5000);
+                }
+                catch (Exception ex)
+                {
+                    StatusMessage = $"프로세스 종료 오류: {ex.Message}";
+                }
+
+                IsProcessing = false;
+                StatusMessage = "분석이 취소되었습니다.";
+                _cancellationTokenSource = new CancellationTokenSource(); // CancellationTokenSource 재설정
             }
         }
 
-        // [핵심] Python 프로세스 실행 및 취소 로직 (FileName에 Anaconda 경로 적용)
-        private async void ExecuteProcessVideo(object parameter)
+        // [핵심] Python 프로세스 실행 및 실시간 스트리밍 로직 (UI 텍스트 제거 적용)
+        private void ExecuteProcessVideo(object parameter)
         {
-            _cancellationTokenSource = new CancellationTokenSource();
-            var cancellationToken = _cancellationTokenSource.Token;
+            if (string.IsNullOrEmpty(SelectedVideoPath))
+            {
+                StatusMessage = "영상을 먼저 선택해 주세요.";
+                return;
+            }
 
-            IsProcessing = true;
-            DetectionResults.Clear();
-            StatusMessage = "Python (YOLOv8)을 이용한 영상 분석을 시작합니다...";
+            if (IsProcessing)
+            {
+                StatusMessage = "이미 영상 분석이 진행 중입니다.";
+                return;
+            }
+
+            // [핵심 수정] 영상 분석 시작 시 화면 중앙의 안내 메시지 텍스트를 즉시 지웁니다.
+            StatusMessage = string.Empty;
+
+            // CancellationTokenSource 초기화
+            _cancellationTokenSource = new CancellationTokenSource();
+
+            // --- Python 프로세스 시작 설정 ---
+            string pythonScriptPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Scripts", "yolo_detector.py");
+
+            ProcessStartInfo start = new ProcessStartInfo
+            {
+                // [수정된 경로] 새로운 가상 환경의 python.exe 경로 (사용자 설정 경로 반영)
+                FileName = @"C:\Users\Jun_0\anaconda3\envs\yolo_new_env\python.exe",
+                Arguments = $"\"{pythonScriptPath}\" \"{SelectedVideoPath}\"",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+
+            _process = new Process();
+            _process.StartInfo = start;
+            _process.EnableRaisingEvents = true;
+
+            // 이벤트 핸들러 연결
+            _process.OutputDataReceived += (s, e) => Process_OutputDataReceived(s, e, _cancellationTokenSource.Token);
+            _process.ErrorDataReceived += Process_ErrorDataReceived;
+            _process.Exited += Process_Exited;
 
             try
             {
-                string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
-                string pythonScriptPath = Path.Combine(baseDirectory, "Scripts", "yolo_detector.py");
-
-                if (!File.Exists(pythonScriptPath))
-                {
-                    StatusMessage = $"오류: Python 스크립트 '{Path.GetFileName(pythonScriptPath)}'를 Scripts 폴더에서 찾을 수 없습니다.";
-                    return;
-                }
-
-                // ProcessStartInfo 설정
-                ProcessStartInfo start = new ProcessStartInfo
-                {
-                    // ----------------------------------------------------------------------------------------------------
-                    // [최종 수정된 부분] 사용자님이 찾으신 Anaconda 경로 적용
-                    // ----------------------------------------------------------------------------------------------------
-                    FileName = @"C:\Users\Jun_0\anaconda3\python.exe",
-
-                    Arguments = $"\"{pythonScriptPath}\" \"{SelectedVideoPath}\"",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                };
-                // 
-
-                string resultJson = null;
-                string errors = null;
-                Process process = null;
-
-                await Task.Run(() =>
-                {
-                    process = Process.Start(start);
-
-                    // 취소 요청 감지를 위한 Task
-                    Task cancellationTask = Task.Run(() =>
-                    {
-                        try { cancellationToken.ThrowIfCancellationRequested(); }
-                        catch (OperationCanceledException)
-                        {
-                            if (process != null && !process.HasExited) { process.Kill(); return; }
-                        }
-                    }, cancellationToken);
-
-                    // 프로세스 종료 대기 (10분 타임아웃)
-                    if (process.WaitForExit(600000))
-                    {
-                        resultJson = process.StandardOutput.ReadToEnd();
-                        errors = process.StandardError.ReadToEnd();
-                    }
-                    else if (process != null && !process.HasExited)
-                    {
-                        process.Kill();
-                        errors = "분석 시간이 10분을 초과하여 강제 종료되었습니다.";
-                    }
-
-                }, cancellationToken);
-
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    StatusMessage = "⛔ 영상 분석이 사용자 요청으로 취소되었습니다.";
-                    return;
-                }
-
-                if (!string.IsNullOrWhiteSpace(errors))
-                {
-                    StatusMessage = $"[Python 환경/실행 오류] {errors}";
-                    return;
-                }
-
-                ParseYoloResult(resultJson);
-
-            }
-            catch (OperationCanceledException)
-            {
-                StatusMessage = "⛔ 영상 분석이 사용자 요청으로 취소되었습니다.";
+                _process.Start();
+                _process.BeginOutputReadLine();
+                _process.BeginErrorReadLine();
+                IsProcessing = true;
             }
             catch (Exception ex)
             {
-                StatusMessage = $"[C# 시스템 오류] 프로세스 실행 실패: {ex.Message}";
-            }
-            finally
-            {
+                StatusMessage = $"분석 시작 오류: {ex.Message}";
                 IsProcessing = false;
-                _cancellationTokenSource?.Dispose();
-                _cancellationTokenSource = null;
             }
         }
 
-        // Python에서 받은 JSON 결과를 파싱하여 ObservableCollection에 추가
+        // Python에서 받은 프레임별 JSON 데이터를 처리
+        private void ProcessFrameData(string frameJson)
+        {
+            if (string.IsNullOrWhiteSpace(frameJson)) return;
+
+            // UI 스레드에서 업데이트
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                try
+                {
+                    using (JsonDocument document = JsonDocument.Parse(frameJson))
+                    {
+                        var root = document.RootElement;
+
+                        if (root.TryGetProperty("type", out var typeElement) && typeElement.GetString() == "frame_data")
+                        {
+                            // 1. 상태 업데이트
+                            if (root.TryGetProperty("frame_id", out var frameIdElement))
+                            {
+                                int frameId = frameIdElement.GetInt32();
+                                StatusMessage = $"스트리밍 중... 프레임 {frameId} 처리 완료.";
+                            }
+
+                            // 2. 바운딩 박스 그리기 명령을 View-Codebehind로 전달
+                            DrawingCommandReceived?.Invoke(frameJson);
+                        }
+                        else if (root.TryGetProperty("type", out var summaryType) && summaryType.GetString() == "summary")
+                        {
+                            // 분석 완료 메시지 및 최종 통계 처리
+                            ParseYoloResult(frameJson);
+                        }
+                    }
+                }
+                catch (JsonException)
+                {
+                    // 유효한 JSON이 아닐 경우 (무시)
+                }
+                catch (Exception ex)
+                {
+                    StatusMessage = $"프레임 데이터 처리 오류: {ex.Message}";
+                }
+            });
+        }
+
+        // Python Process Output Handler
+        private void Process_OutputDataReceived(object sender, DataReceivedEventArgs e, CancellationToken token)
+        {
+            if (e.Data != null && !token.IsCancellationRequested)
+            {
+                ProcessFrameData(e.Data);
+            }
+        }
+
+        // Python Process Error Handler
+        private void Process_ErrorDataReceived(object sender, DataReceivedEventArgs e)
+        {
+            if (e.Data != null)
+            {
+                // UI 스레드에서 오류 메시지 처리
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    if (e.Data.Contains("Traceback") || e.Data.Contains("Error"))
+                    {
+                        StatusMessage = $"[Python 오류] {e.Data}";
+                        IsProcessing = false;
+                        _process?.Kill();
+                    }
+                });
+            }
+        }
+
+        // Python Process Exited Handler
+        private void Process_Exited(object sender, EventArgs e)
+        {
+            // UI 스레드에서 상태 업데이트
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                if (IsProcessing)
+                {
+                    // 분석이 정상 종료되지 않은 경우
+                    StatusMessage = "영상 분석이 예기치 않게 종료되었습니다.";
+                }
+                IsProcessing = false;
+            });
+        }
+
+        // 최종 결과 요약 통계 처리
         private void ParseYoloResult(string resultJson)
         {
-            if (string.IsNullOrWhiteSpace(resultJson))
-            {
-                StatusMessage = "Python으로부터 결과를 받지 못했습니다. (빈 출력)";
-                return;
-            }
+            if (string.IsNullOrWhiteSpace(resultJson)) return;
 
             try
             {
@@ -233,20 +296,23 @@ namespace WpfApp1.ViewModels
 
                     if (status == "success")
                     {
-                        var detections = root.GetProperty("detections");
-                        int totalFrames = root.GetProperty("total_frames").GetInt32();
-
-                        foreach (var prop in detections.EnumerateObject())
+                        // 기존 로직: detections 정보가 있다면 업데이트
+                        if (root.TryGetProperty("detections", out var detections))
                         {
-                            DetectionResults.Add(new DetectedObject
+                            DetectionResults.Clear();
+                            foreach (var prop in detections.EnumerateObject())
                             {
-                                ObjectType = prop.Name,
-                                Count = prop.Value.GetInt32()
-                            });
+                                DetectionResults.Add(new DetectedObject
+                                {
+                                    ObjectType = prop.Name,
+                                    Count = prop.Value.GetInt32()
+                                });
+                            }
+                            UpdateTopThreeResults();
                         }
 
-                        StatusMessage = $"영상 분석 완료. 총 {totalFrames} 프레임 분석됨.";
-                        UpdateTopThreeResults();
+                        string message = root.GetProperty("message").GetString();
+                        StatusMessage = message; // 최종 완료 메시지
                     }
                     else
                     {
@@ -257,11 +323,15 @@ namespace WpfApp1.ViewModels
             }
             catch (JsonException ex)
             {
-                StatusMessage = $"JSON 파싱 오류: 받은 데이터가 유효하지 않습니다. ({ex.Message})";
+                StatusMessage = $"최종 JSON 파싱 오류: 받은 데이터가 유효하지 않습니다. ({ex.Message})";
             }
             catch (Exception ex)
             {
                 StatusMessage = $"결과 처리 중 알 수 없는 오류 발생: {ex.Message}";
+            }
+            finally
+            {
+                IsProcessing = false;
             }
         }
 
@@ -278,4 +348,5 @@ namespace WpfApp1.ViewModels
             }
         }
     }
+
 }

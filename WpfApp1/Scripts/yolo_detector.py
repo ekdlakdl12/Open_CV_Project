@@ -1,88 +1,106 @@
-import sys
-import json
 import cv2
 from ultralytics import YOLO
+import json
+import argparse
+import sys
+import time
 
-# ----------------------------------------------------
-# 1. 입력 파라미터 확인 및 모델 로딩
-# ----------------------------------------------------
-def analyze_video(video_path):
+def run_detection(video_path):
     """
-    주어진 경로의 영상을 YOLOv8로 분석하고 결과를 반환합니다.
+    지정된 비디오 경로에서 YOLOv8을 사용하여 객체를 감지하고
+    결과(바운딩 박스 좌표)를 JSON 형식으로 실시간 출력합니다.
     """
+    
     try:
-        # YOLOv8 모델 로드 (pre-trained weights)
-        # 실제 사용 시, 모델 파일 경로를 지정해야 합니다. (예: 'yolov8n.pt')
-        model = YOLO('yolov8n.pt') 
+        # 'yolov8s.pt' 모델 사용 (인식 정확도 높임)
+        model = YOLO('yolov8s.pt') 
+    except Exception as e:
+        error_output = json.dumps({"status": "error", "message": f"YOLO 모델 로드 실패: {e}"})
+        print(error_output, file=sys.stderr, flush=True)
+        return
 
-        # OpenCV를 사용하여 영상 파일 열기
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            return {"error": f"Error opening video file: {video_path}"}
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        error_output = json.dumps({"status": "error", "message": f"비디오 파일 열기 실패: {video_path}"})
+        print(error_output, file=sys.stderr, flush=True)
+        return
+
+    frame_id = 0
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    start_time = time.time()
+    
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # YOLOv8 추론 (객체 추적 활성화 및 최적화)
+        # --- [최종 인식 정확도 및 범위 최대화 설정] ---
+        # conf=0.10: 신뢰도 임계값을 대폭 낮춰 (0.20 -> 0.10) 측면/작은 차량까지 강제로 인식 시도
+        # iou=0.35: 밀착 차량 분리 유지
+        # imgsz=1280: 고해상도 처리 유지
+        results = model.track(frame, 
+                              persist=True, 
+                              tracker='bytetrack.yaml', 
+                              verbose=False,
+                              conf=0.10,      # <--- [핵심 수정] 신뢰도 임계값 대폭 낮춤
+                              iou=0.35,       
+                              imgsz=1280,     
+                              max_det=300) 
+        # ------------------------------------
         
-        # 인식된 객체의 종류별 카운트 저장
-        detection_counts = {}
+        boxes_data = []
         
-        frame_count = 0
-        
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
+        if results and results[0].boxes and results[0].boxes.id is not None:
+            boxes = results[0].boxes
             
-            # --- [핵심] YOLOv8 인식 수행 ---
-            # stream=True로 설정하여 메모리 효율성을 높일 수 있습니다.
-            results = model(frame, verbose=False) 
-            
-            for result in results:
-                # result.boxes: 바운딩 박스 정보
-                # result.names: 클래스 이름 딕셔너리
-                # result.boxes.cls: 감지된 객체의 클래스 ID (Tensor)
+            for box in boxes:
+                # xyxy: xmin, ymin, xmax, ymax
+                x_min, y_min, x_max, y_max = [int(x) for x in box.xyxy[0].tolist()]
+                conf = round(box.conf[0].item(), 2)
+                cls_id = int(box.cls[0].item())
+                class_name = model.names[cls_id]
 
-                for box in result.boxes:
-                    class_id = int(box.cls.cpu().numpy()[0])
-                    class_name = result.names[class_id]
-                    
-                    # 원하는 객체만 필터링 (선택 사항)
-                    # if class_name in ['car', 'truck', 'person', 'traffic sign']:
-                        
-                    detection_counts[class_name] = detection_counts.get(class_name, 0) + 1
-                    
-            frame_count += 1
-            # 고속으로 처리하기 위해 전체 프레임을 다 분석하지 않고 일부만 샘플링할 수 있습니다.
-            # if frame_count % 10 != 0: continue 
+                track_id = int(box.id[0].item()) 
 
-        cap.release()
+                boxes_data.append({
+                    "id": track_id,
+                    "class": class_name,
+                    "conf": conf,
+                    "x_min": x_min,
+                    "y_min": y_min,
+                    "x_max": x_max,
+                    "y_max": y_max,
+                })
 
-        # 결과 정리: 누적 카운트를 프레임 수로 나누어 평균 개수를 낼 수도 있습니다.
-        # 여기서는 전체 누적 카운트를 반환합니다.
-        
-        # ----------------------------------------------------
-        # 2. 결과 포맷팅 및 표준 출력 (C#로 전달)
-        # ----------------------------------------------------
-        
-        # C#에서 쉽게 파싱할 수 있도록 JSON 형태로 변환
-        output_data = {
-            "status": "success",
-            "total_frames": frame_count,
-            "detections": detection_counts
+        frame_output = {
+            "type": "frame_data",
+            "frame_id": frame_id,
+            "total_frames": total_frames,
+            "boxes": boxes_data
         }
         
-        return output_data
+        print(json.dumps(frame_output), flush=True) 
 
-    except Exception as e:
-        # 오류 발생 시 오류 메시지 출력 후 종료
-        return {"status": "error", "message": str(e)}
+        frame_id += 1
 
-# --- 메인 실행부 ---
+    cap.release()
+    
+    end_time = time.time()
+    total_time = end_time - start_time
+    summary_output = {
+        "type": "summary",
+        "status": "success", 
+        "message": f"분석 완료. 총 {frame_id} 프레임 처리.",
+        "time": round(total_time, 2),
+        "detections": {} 
+    }
+    print(json.dumps(summary_output), flush=True)
+
+
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        # 영상 경로가 인수로 제공되지 않은 경우
-        output = {"status": "error", "message": "Usage: python yolo_detector.py <video_path>"}
-    else:
-        # 첫 번째 인수가 영상 경로
-        video_file_path = sys.argv[1]
-        output = analyze_video(video_file_path)
-
-    # 결과를 표준 출력 (stdout)으로 내보냄
-    print(json.dumps(output))
+    parser = argparse.ArgumentParser(description="YOLOv8 Video Detector for C# Integration")
+    parser.add_argument("video_path", help="Path to the input video file")
+    
+    args = parser.parse_args()
+    run_detection(args.video_path)
