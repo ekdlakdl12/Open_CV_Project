@@ -5,18 +5,17 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
-using System.Threading.Tasks;
 using System.Windows.Input;
 using WpfApp1.Models;
 using System.Windows;
 using System.Collections.Generic;
-using System.ComponentModel; // INotifyPropertyChanged 구현을 위해 추가
-using System.Runtime.CompilerServices; // CallerMemberName 사용을 위해 추가
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
 
 namespace WpfApp1.ViewModels
 {
-    // 기존 프로젝트의 ObservableObject를 상속받도록 가정합니다.
-    public class MainWindowViewModel : ObservableObject // (ObservableObject는 별도의 파일/위치에 존재해야 합니다.)
+    // ObservableObject는 별도의 파일/위치에 존재해야 합니다.
+    public class MainWindowViewModel : ObservableObject
     {
         // --- Private Fields ---
         private Process _process;
@@ -29,7 +28,7 @@ namespace WpfApp1.ViewModels
         private ObservableCollection<DetectedObject> _detectionResults;
         private ObservableCollection<DetectedObject> _topThreeResults;
 
-        // [핵심 추가] View로 바운딩 박스 데이터를 전달할 Action (ViewModel <-> View 통신)
+        // [핵심 추가] View로 바운딩 박스 데이터를 전달할 Action
         public Action<string> DrawingCommandReceived;
 
         // --- Public Properties (Data Binding Target) ---
@@ -63,7 +62,7 @@ namespace WpfApp1.ViewModels
             set => SetProperty(ref _topThreeResults, value);
         }
 
-        // --- Commands (Action Binding Target) ---
+        // --- Commands ---
         public ICommand SelectVideoCommand { get; private set; }
         public ICommand ProcessVideoCommand { get; private set; }
         public ICommand CancelProcessCommand { get; private set; }
@@ -84,7 +83,7 @@ namespace WpfApp1.ViewModels
             }
             else
             {
-                StatusMessage = "영상을 선택해 주세요. (테스트 경로 설정 필요)";
+                StatusMessage = "영상을 선택해 주세요.";
             }
 
             // 명령어 초기화 (RelayCommand는 별도 파일/위치에 존재해야 합니다.)
@@ -138,7 +137,7 @@ namespace WpfApp1.ViewModels
             }
         }
 
-        // [핵심] Python 프로세스 실행 및 실시간 스트리밍 로직 (UI 텍스트 제거 적용)
+        // [핵심] Python 프로세스 실행 및 실시간 스트리밍 로직
         private void ExecuteProcessVideo(object parameter)
         {
             if (string.IsNullOrEmpty(SelectedVideoPath))
@@ -153,10 +152,10 @@ namespace WpfApp1.ViewModels
                 return;
             }
 
-            // [핵심 수정] 영상 분석 시작 시 화면 중앙의 안내 메시지 텍스트를 즉시 지웁니다.
-            StatusMessage = string.Empty;
-
-            // CancellationTokenSource 초기화
+            // 초기화
+            DetectionResults.Clear();
+            TopThreeResults.Clear();
+            StatusMessage = "영상 분석 시작 중...";
             _cancellationTokenSource = new CancellationTokenSource();
 
             // --- Python 프로세스 시작 설정 ---
@@ -164,7 +163,7 @@ namespace WpfApp1.ViewModels
 
             ProcessStartInfo start = new ProcessStartInfo
             {
-                // [수정된 경로] 새로운 가상 환경의 python.exe 경로 (사용자 설정 경로 반영)
+                // [경로 확인 필수] 사용자 설정 경로 반영
                 FileName = @"C:\Users\Jun_0\anaconda3\envs\yolo_new_env\python.exe",
                 Arguments = $"\"{pythonScriptPath}\" \"{SelectedVideoPath}\"",
                 UseShellExecute = false,
@@ -186,12 +185,13 @@ namespace WpfApp1.ViewModels
             {
                 _process.Start();
                 _process.BeginOutputReadLine();
-                _process.BeginErrorReadLine();
+                _process.BeginErrorReadLine(); // 오류 스트림 비동기 읽기 시작 (필수)
                 IsProcessing = true;
+                StatusMessage = "Python 분석 프로세스가 시작되었습니다...";
             }
             catch (Exception ex)
             {
-                StatusMessage = $"분석 시작 오류: {ex.Message}";
+                StatusMessage = $"분석 시작 오류: Python 실행 파일 경로 또는 권한을 확인하세요. ({ex.Message})";
                 IsProcessing = false;
             }
         }
@@ -235,12 +235,12 @@ namespace WpfApp1.ViewModels
                 }
                 catch (Exception ex)
                 {
-                    StatusMessage = $"프레임 데이터 처리 오류: {ex.Message}";
+                    StatusMessage = $"프레임 데이터 처리 중 오류 발생: {ex.Message}";
                 }
             });
         }
 
-        // Python Process Output Handler
+        // Python Process Output Handler (Standard Output: JSON 데이터)
         private void Process_OutputDataReceived(object sender, DataReceivedEventArgs e, CancellationToken token)
         {
             if (e.Data != null && !token.IsCancellationRequested)
@@ -249,7 +249,7 @@ namespace WpfApp1.ViewModels
             }
         }
 
-        // Python Process Error Handler
+        // [수정된 핵심 로직] Python Process Error Handler (Standard Error: Traceback, 경고 등)
         private void Process_ErrorDataReceived(object sender, DataReceivedEventArgs e)
         {
             if (e.Data != null)
@@ -257,26 +257,44 @@ namespace WpfApp1.ViewModels
                 // UI 스레드에서 오류 메시지 처리
                 Application.Current.Dispatcher.Invoke(() =>
                 {
-                    if (e.Data.Contains("Traceback") || e.Data.Contains("Error"))
+                    // Python의 경고나 로그는 stderr로 자주 출력되므로,
+                    // 무조건 프로세스를 종료하지 않고, 상태바에 표시만 합니다.
+                    // 실제 종료는 Process_Exited에서 ExitCode를 보고 판단합니다.
+
+                    if (!string.IsNullOrWhiteSpace(e.Data))
                     {
-                        StatusMessage = $"[Python 오류] {e.Data}";
-                        IsProcessing = false;
-                        _process?.Kill();
+                        // Traceback이 발생하면 상태 메시지에 누적 출력
+                        StatusMessage = $"[Python 로그/경고] {e.Data}";
+
+                        // 디버깅 목적으로 Debug 창에 상세 로그 출력
+                        Debug.WriteLine($"Python STDERR: {e.Data}");
                     }
                 });
             }
         }
 
-        // Python Process Exited Handler
+        // [수정된 핵심 로직] Python Process Exited Handler
         private void Process_Exited(object sender, EventArgs e)
         {
             // UI 스레드에서 상태 업데이트
             Application.Current.Dispatcher.Invoke(() =>
             {
+                // 프로세스가 실행 중이었다면 (IsProcessing이 true였다면)
                 if (IsProcessing)
                 {
-                    // 분석이 정상 종료되지 않은 경우
-                    StatusMessage = "영상 분석이 예기치 않게 종료되었습니다.";
+                    // 비정상 종료 (0이 아니면 오류로 종료된 것)
+                    if (_process != null && _process.ExitCode != 0)
+                    {
+                        StatusMessage = $"🚨 영상 분석이 예기치 않게 종료되었습니다. (Exit Code: {_process.ExitCode}). C:\\temp\\yolo_debug.log 파일을 확인하세요.";
+                    }
+                    else if (_process != null && _process.ExitCode == 0)
+                    {
+                        // 정상 종료되었지만 Summary JSON을 놓쳤을 경우
+                        if (!StatusMessage.Contains("분석 완료"))
+                        {
+                            StatusMessage = "분석 완료되었으나 최종 결과 JSON을 받지 못했습니다. (Exit Code 0)";
+                        }
+                    }
                 }
                 IsProcessing = false;
             });
@@ -285,6 +303,8 @@ namespace WpfApp1.ViewModels
         // 최종 결과 요약 통계 처리
         private void ParseYoloResult(string resultJson)
         {
+            // ... (기존 ParseYoloResult 로직 유지)
+            // 이 메서드는 정상 종료 시 StatusMessage를 "분석 완료"로 업데이트하고 IsProcessing을 false로 설정합니다.
             if (string.IsNullOrWhiteSpace(resultJson)) return;
 
             try
@@ -296,9 +316,9 @@ namespace WpfApp1.ViewModels
 
                     if (status == "success")
                     {
-                        // 기존 로직: detections 정보가 있다면 업데이트
                         if (root.TryGetProperty("detections", out var detections))
                         {
+                            // ... (DetectionResults 및 TopThreeResults 업데이트 로직)
                             DetectionResults.Clear();
                             foreach (var prop in detections.EnumerateObject())
                             {
@@ -331,7 +351,7 @@ namespace WpfApp1.ViewModels
             }
             finally
             {
-                IsProcessing = false;
+                IsProcessing = false; // 최종적으로 IsProcessing을 false로 설정
             }
         }
 
@@ -340,7 +360,7 @@ namespace WpfApp1.ViewModels
             TopThreeResults.Clear();
 
             var top3 = DetectionResults.OrderByDescending(d => d.Count)
-                               .Take(3);
+                                       .Take(3);
 
             foreach (var obj in top3)
             {
@@ -348,5 +368,4 @@ namespace WpfApp1.ViewModels
             }
         }
     }
-
 }
