@@ -8,6 +8,5 @@ namespace WpfApp1.Models
 {
     internal class Product
     {
-        int a = 1;
     }
 }
