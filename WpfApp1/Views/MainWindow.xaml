@@ -1,8 +1,105 @@
-﻿<Window x:Class="WpfApp1.Views.MainWindow"  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+﻿<Window x:Class="WpfApp1.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:WpfApp1.Views"  mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
-    <Grid/>
+        xmlns:local="clr-namespace:WpfApp1.Views"
+        mc:Ignorable="d"
+        Title="고속도로 객체 인식 분석기 (YOLO 연동)" Height="650" Width="900">
+
+    <Window.Resources>
+        <local:BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+    </Window.Resources>
+
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+            <Button x:Name="SelectVideoButton" Content="영상 파일 선택" 
+                    Width="150" Height="30" Margin="0,0,10,0"
+                    Click="SelectVideoButton_Click"/>
+
+            <TextBox Text="{Binding SelectedVideoPath}" IsReadOnly="True" 
+                     Width="450" Height="30" VerticalContentAlignment="Center"
+                     Background="#F0F0F0" ToolTip="{Binding SelectedVideoPath}"/>
+
+            <Button Content="영상 분석 시작" 
+                    Width="100" Height="30" Margin="10,0,5,0"
+                    Command="{Binding ProcessVideoCommand}"
+                    IsEnabled="{Binding CanExecuteProcessVideo}"/>
+
+            <Button Content="취소" 
+                    Width="70" Height="30"
+                    Command="{Binding CancelProcessCommand}"
+                    IsEnabled="{Binding IsProcessing}"/>
+        </StackPanel>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="2*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <Grid Grid.Column="0" Margin="0,0,10,0">
+
+                <MediaElement x:Name="VideoPlayer" 
+                              Source="{Binding SelectedVideoPath}" 
+                              LoadedBehavior="Manual" 
+                              Stretch="Uniform" 
+                              MediaOpened="VideoPlayer_MediaOpened"/>
+
+                <Canvas x:Name="BoundingBoxCanvas" 
+                        Background="Transparent"
+                        Margin="0"/>
+
+                <TextBlock Text="영상을 선택하거나 분석을 시작해 주세요." 
+                           Foreground="White" 
+                           VerticalAlignment="Center" HorizontalAlignment="Center" FontSize="18"
+                           Visibility="{Binding IsProcessing, Converter={StaticResource BooleanToVisibilityConverter}, ConverterParameter=Inverse}"/>
+            </Grid>
+            <StackPanel Grid.Column="1" Margin="10,0,0,0">
+                <TextBlock Text="🏆 최다 인식 객체 (Top 3)" FontWeight="Bold" Margin="0,0,0,5" FontSize="14"/>
+                <ItemsControl ItemsSource="{Binding TopThreeResults}" Margin="0,0,0,10">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border BorderBrush="#FFA000" BorderThickness="1" CornerRadius="4" Padding="5" Margin="0,2">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding ObjectType}" FontWeight="SemiBold" Width="100"/>
+                                    <TextBlock Text="{Binding Count, StringFormat='{} ({0} 건)'}" Foreground="Red"/>
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <Separator Margin="0,5"/>
+
+                <TextBlock Text="📊 전체 인식 결과" FontWeight="Bold" Margin="0,5,0,5" FontSize="14"/>
+
+                <DataGrid AutoGenerateColumns="False" CanUserAddRows="False" 
+                          ItemsSource="{Binding DetectionResults}" HeadersVisibility="Column" 
+                          MaxHeight="300">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="객체 종류" Binding="{Binding ObjectType}" Width="*"/>
+                        <DataGridTextColumn Header="개수" Binding="{Binding Count}" Width="Auto"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </StackPanel>
+        </Grid>
+
+        <StatusBar Grid.Row="2" Margin="0,10,0,0">
+            <StatusBarItem>
+                <TextBlock Text="{Binding StatusMessage}"/>
+            </StatusBarItem>
+            <StatusBarItem HorizontalAlignment="Right">
+                <ProgressBar IsIndeterminate="{Binding IsProcessing}" 
+                             Width="150" Height="15" Margin="5,0,0,0"
+                             Visibility="{Binding IsProcessing, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+            </StatusBarItem>
+        </StatusBar>
+    </Grid>
 </Window>
