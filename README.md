@@ -34,11 +34,11 @@
 
 | 📌 팀장 (👑PM) 최준영 | 📌 김준형 | 📌 김진우 |
 | :---: | :---: | :---: |
-| <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTlvx9kKgphtqxjtyo02-hkg1Vc3retA_F-Ow&s" alt="팀장 프로필" width="150"/> | <img src="https://i.pinimg.com/736x/cd/29/5b/cd295b740eb04c3ec4acdd6cb4f11f47.jpg" alt="김준형 프로필" width="150"/> | <img src="" alt="팀원 프로필" width="150"/> |
-| **담당**: 팀장 | **담당**: 팀원 | **담당**: 백엔드 & 핵심 알고리즘 개발 |
-| **이메일**: rkfflffpdh12@gmail.com | **이메일**: 916kimjh@naver.com | **이메일**: teamB@example.com |
-| **GitHub**: [ekdlakdl12](https://github.com/ekdlakdl12/Open_CV_Project) | **GitHub**: [Kim-Junghyeong](https://github.com/Kim-Junghyeong?tab=repositories) | **GitHub**: [teamB-id](https://github.com/teamB-id) |
-| *태어난 김에 사는 개발자.* | *고속도로의 평화 지키미.* | *시스템 통합 및 데이터 처리 담당* |
+| <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTlvx9kKgphtqxjtyo02-hkg1Vc3retA_F-Ow&s" alt="팀장 프로필" width="150"/> | <img src="https://i.pinimg.com/736x/cd/29/5b/cd295b740eb04c3ec4acdd6cb4f11f47.jpg" alt="김준형 프로필" width="150"/> | <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQV4NYGjlzcTvxRY-mJC97tLv_7QrWDQjqNSQ&s" alt="팀원 프로필" width="250"/> |
+| **담당**: 팀장 | **담당**: 팀원 | **담당**: 팀원 |
+| **이메일**: rkfflffpdh12@gmail.com | **이메일**: 916kimjh@naver.com | **이메일**: https://github.com/potoblue?tab=repositories |
+| **GitHub**: [ekdlakdl12](https://github.com/ekdlakdl12/Open_CV_Project) | **GitHub**: [Kim-Junghyeong](https://github.com/Kim-Junghyeong?tab=repositories) | **GitHub**: [kim-jin-wo](https://github.com/potoblue?tab=repositories) |
+| *태어난 김에 사는 개발자.* | *고속도로의 평화 지키미.* | *고속도로의 평화 지키미* |
 
 ---
 
@@ -50,10 +50,9 @@
 | 2 | **차선 감지/전용차로 위반 판독** | **법규 준수 여부 판독** 목표 달성. **지정된 시간 및 구간 외 버스 전용차로 통행 차량** (도로교통법 제61조)의 위반 행위를 감지함. |
 | 3 | **차량 속도 측정 및 위반 감지** | **교통 속도 법규 위반 감지** 목표 달성. 실시간 속도 측정 및 **최저 제한 속도 미만 운행 행위** (정체 등 부득이한 상황 제외)를 감지함. |
 | 4 | **이벤트 기반 녹화** | **법적 증거 자료 확보** 목표 달성. 위반 행위 및 사고 발생 전후 시점의 고화질 영상 클립을 자동 저장하여 증거 자료로 활용. |
-| 5 | **추돌/사고 위험 감지** | 전방 차량과의 거리와 TTC 분석을 통해 잠재적 추돌 위험을 예측하고 경고함. |
-| 6 | **증거 메타데이터 기록** | 영상과 함께 **위반 종류, 시간, GPS, 속도, 번호판** 등 정형화된 증거 데이터 기록. |
-| 7 | **차종 인식 및 분류** | 딥러닝 모델을 활용하여 차량의 종류를 자동 분류함. |
-| 8 | **전방 차량대수 카운팅** | 영상 내 차량 객체를 실시간으로 탐지하여 전방 좌우측 차량대수를 계산함. |
+| 5 | **증거 메타데이터 기록** | 영상과 함께 **위반 종류, 시간, GPS, 속도, 번호판** 등 정형화된 증거 데이터 기록. |
+| 6 | **차종 인식 및 분류** | 딥러닝 모델을 활용하여 차량의 종류를 자동 분류함. |
+| 7 | **전방 차량대수 카운팅** | 영상 내 차량 객체를 실시간으로 탐지하여 전방 좌우측 차량대수를 계산함. |
 
 ---
 
