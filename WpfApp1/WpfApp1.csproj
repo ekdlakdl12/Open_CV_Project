@@ -22,10 +22,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="Scripts\eng.traineddata">
+    <None Update="tessdata\eng.traineddata">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
-    <None Update="Scripts\kor.traineddata">
+    <None Update="tessdata\kor.traineddata">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
     <None Update="Scripts\yolo_detector.py">
