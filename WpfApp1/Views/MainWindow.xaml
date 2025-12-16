@@ -19,6 +19,8 @@
 
             <TextBlock Margin="20,6,0,0" Text="{Binding TrackedCountText}"/>
 
+            <TextBlock Margin="20,6,0,0" FontWeight="Bold" Text="{Binding CountText}"/>
+
             <TextBlock Margin="20,6,0,0" Text="Dets:"/>
             <TextBlock Margin="5,6,0,0" Text="{Binding DetectionsCount}"/>
         </StackPanel>
