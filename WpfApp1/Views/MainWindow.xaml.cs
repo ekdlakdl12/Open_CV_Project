@@ -53,7 +53,6 @@ namespace WpfApp11
 
             try
             {
-            
                 using (Image<Bgr, Byte> imgOriginal = new Image<Bgr, Byte>(imagePath))
                 {
                     OriginalImageControl.Source = ToBitmapSource(imgOriginal.ToBitmap());
