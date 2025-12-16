@@ -2,9 +2,12 @@
 using Emgu.CV.CvEnum;
 using Emgu.CV.Structure;
 using Emgu.CV.Util;
+using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -16,9 +19,9 @@ using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
 using Tesseract;
-using System.Collections.Generic;
-using System.Text.RegularExpressions;
+using Point = System.Drawing.Point;
 using Rectangle = System.Drawing.Rectangle;
+using Size = System.Drawing.Size;
 
 
 
@@ -134,6 +137,19 @@ namespace WpfApp11
                         CvInvoke.AdaptiveThreshold(imgCropped.Convert<Gray, Byte>(), imgLPThresh, 255,
                                                    AdaptiveThresholdType.GaussianC,
                                                    ThresholdType.BinaryInv, 11, 2);
+
+                        Size kernelSize = new Size(2, 2);
+
+                        // Emgu.CV 4.x 이상에서 ElementShape 네임스페이스나 Rectangle 상수 참조 오류 시:
+                        // CvEnum.ElementShape.Rectangle 대신 정수값 0 사용 (0 = Rectangle shape)
+                        Mat kernel = CvInvoke.GetStructuringElement(0, kernelSize, new Point(-1, -1));
+
+                        // 닫힘 연산(Closing Operation): 팽창 후 침식
+                        CvInvoke.MorphologyEx(imgLPThresh, imgLPThresh, MorphOp.Close, kernel, new Point(-1, -1), 1, BorderType.Default, new MCvScalar(0));
+                        // ----------------------------------------
+
+                        // (디버깅용) 닫힘 연산이 적용된 이미지 시각화
+                        ProcessedImageControl.Source = ToBitmapSource(imgLPThresh.ToBitmap());
 
                         // Tesseract OCR 수행 (PageSegMode.SingleBlock 사용)
                         using (var engine = new TesseractEngine(tessDataPath, "kor+eng", EngineMode.Default))
