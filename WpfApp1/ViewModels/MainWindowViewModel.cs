@@ -9,6 +9,7 @@ using System.Diagnostics;
 using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using System.Linq;
 
 namespace WpfApp1.ViewModels
 {
@@ -16,15 +17,24 @@ namespace WpfApp1.ViewModels
     {
         private const string OnnxPath = "yolov8n.onnx";
 
-        // ✅ 튜닝값
-        private const int RenderEveryNFrames = 1;   // 화면은 가능한 매 프레임(부담되면 2로)
-        private const int LogEveryMs = 2000;        // 로그 2초마다
-        private const int MaxSkipFramesPerTick = 5; // 한 번에 너무 많이 스킵 방지
+        // ✅ 튜닝값 및 상수
+        private const int RenderEveryNFrames = 1;
+        private const int LogEveryMs = 2000;
+        private const int MaxSkipFramesPerTick = 5;
+        private const float SPEED_SCALE_FACTOR = 8.0f;
+
+        // ✅ 시각화 개선을 위한 색상 정의
+        // (B, G, R 순서: OpenCvSharp Scalar)
+        private static readonly Scalar ColorBox = new(0, 255, 255);      // 노란색 (테두리)
+        private static readonly Scalar ColorLabel = new(0, 255, 0);     // 녹색 (ID, 차종)
+        private static readonly Scalar ColorSpeedHigh = new(0, 0, 255); // 빨간색 (속도 높음)
+        private static readonly Scalar ColorSpeedNormal = new(0, 165, 255); // 주황색 (속도 보통)
+
 
         private readonly DispatcherTimer _timer = new();
         private readonly Stopwatch _swLog = new();
-        private readonly Stopwatch _swTick = new();     // Tick 처리시간 측정
-        private readonly Stopwatch _swInfer = new();    // 추론시간 측정
+        private readonly Stopwatch _swTick = new();
+        private readonly Stopwatch _swInfer = new();
 
         private readonly VideoPlayerService _video = new();
         private readonly YoloDetectService _detector = new(OnnxPath);
@@ -33,12 +43,12 @@ namespace WpfApp1.ViewModels
 
         private int _frameCount = 0;
 
-        // ✅ 추론 관련(비동기)
         private volatile bool _inferRunning = false;
         private readonly object _detLock = new();
         private List<Detection> _lastDetections = new();
 
-        // ✅ 성능 로그 누적
+        private readonly Dictionary<int, TrackedObject> _trackedObjects = new();
+
         private long _inferMsAcc = 0;
         private int _inferCount = 0;
         private long _renderMsAcc = 0;
@@ -69,6 +79,13 @@ namespace WpfApp1.ViewModels
         {
             get => _statusText;
             set { _statusText = value; OnPropertyChanged(); }
+        }
+
+        private string _trackedCountText = "Tracks: 0";
+        public string TrackedCountText
+        {
+            get => _trackedCountText;
+            set { _trackedCountText = value; OnPropertyChanged(); }
         }
 
         private int _detectionsCount;
@@ -106,7 +123,6 @@ namespace WpfApp1.ViewModels
 
             _video.Open(path);
 
-            // ✅ 타이머는 “최대한 자주” 돌리고, 실제 재생 속도는 “프레임 드랍”으로 맞춘다
             _timer.Interval = TimeSpan.FromMilliseconds(1);
 
             _frameCount = 0;
@@ -116,6 +132,8 @@ namespace WpfApp1.ViewModels
             _renderCount = 0;
 
             lock (_detLock) _lastDetections.Clear();
+            _trackedObjects.Clear();
+            TrackedCountText = "Tracks: 0";
             _inferRunning = false;
 
             _swLog.Restart();
@@ -129,11 +147,12 @@ namespace WpfApp1.ViewModels
             _timer.Stop();
             _video.Close();
             StatusText = "Stopped";
+            _trackedObjects.Clear();
+            TrackedCountText = "Tracks: 0";
         }
 
         private void Timer_Tick(object? sender, EventArgs e)
         {
-            // 목표 프레임 시간(ms)
             double targetMs = 1000.0 / _video.Fps;
 
             _swTick.Restart();
@@ -146,14 +165,10 @@ namespace WpfApp1.ViewModels
 
             _frameCount++;
 
-            // =========================
-            // 1) 비동기 추론 (UI 스레드에서 추론 금지)
-            // =========================
+            // 1) 비동기 추론
             if (!_inferRunning)
             {
                 _inferRunning = true;
-
-                // ✅ Mat은 다른 스레드로 넘길 때 Clone해서 넘겨야 안전
                 Mat inferMat = _frame.Clone();
 
                 Task.Run(() =>
@@ -172,10 +187,7 @@ namespace WpfApp1.ViewModels
                         _inferMsAcc += _swInfer.ElapsedMilliseconds;
                         _inferCount++;
                     }
-                    catch
-                    {
-                        // 필요하면 Debug.WriteLine(ex) 처리
-                    }
+                    catch { /* 예외 처리 */ }
                     finally
                     {
                         inferMat.Dispose();
@@ -184,19 +196,33 @@ namespace WpfApp1.ViewModels
                 });
             }
 
-            // =========================
-            // 2) Render (N프레임마다)
-            // =========================
+            // 2) 추적 로직 수행
+            List<Detection> detsSnapshot;
+            lock (_detLock)
+            {
+                detsSnapshot = _lastDetections;
+            }
+
+            TrackAndMatch(detsSnapshot, _video.PosMsec);
+
+
+            // 3) Render (시각화 개선 로직 적용)
             if (RenderEveryNFrames <= 1 || (_frameCount % RenderEveryNFrames == 0))
             {
-                List<Detection> detsSnapshot;
-                lock (_detLock)
-                {
-                    detsSnapshot = _lastDetections;
-                }
-
                 foreach (var d in detsSnapshot)
                 {
+                    _trackedObjects.TryGetValue(d.TrackId, out var track);
+
+                    // 속도 계산 및 텍스트 준비
+                    string speedLineText = "";
+                    int correctedSpeed = 0;
+                    if (track != null)
+                    {
+                        correctedSpeed = (int)(track.RelativeSpeed * SPEED_SCALE_FACTOR);
+                        speedLineText = $"{correctedSpeed:0} km/h";
+                    }
+
+                    // 차종 텍스트 준비
                     string label = d.ClassId switch
                     {
                         2 => "CAR",
@@ -205,15 +231,47 @@ namespace WpfApp1.ViewModels
                         _ => "OBJ"
                     };
 
-                    Cv2.Rectangle(_frame, d.Box, Scalar.LimeGreen, 2);
+                    // 첫 번째 줄: ID와 차종
+                    string idLineText = track != null
+                                        ? $"ID:{track.Id} {label}"
+                                        : $"{label} {d.Score:0.00}";
+
+
+                    // 렌더링 부분: 두 줄 텍스트와 색상 구분
+
+                    // 1. 박스 테두리 색상 (노란색)
+                    Cv2.Rectangle(_frame, d.Box, ColorBox, 2);
+
+                    // 2. 텍스트 1: ID와 차종 (녹색)
+                    int yPos1 = Math.Max(20, d.Box.Y - 20);
+
                     Cv2.PutText(
                         _frame,
-                        $"{label} {d.Score:0.00}",
-                        new OpenCvSharp.Point(d.Box.X, Math.Max(20, d.Box.Y - 5)),
+                        idLineText,
+                        new OpenCvSharp.Point(d.Box.X, yPos1),
                         HersheyFonts.HersheySimplex,
                         0.7,
-                        Scalar.Red,
+                        ColorLabel,
                         2);
+
+                    // 3. 텍스트 2: 속도 
+                    if (track != null)
+                    {
+                        int yPos2 = Math.Max(20, d.Box.Y - 5);
+
+                        // 80 km/h를 기준으로 색상 구분 (고속도로 기준)
+                        Scalar currentSpeedColor = (correctedSpeed >= 80) ? ColorSpeedHigh : ColorSpeedNormal;
+
+                        Cv2.PutText(
+                            _frame,
+                            speedLineText,
+                            new OpenCvSharp.Point(d.Box.X, yPos2),
+                            HersheyFonts.HersheySimplex,
+                            0.7,
+                            currentSpeedColor,
+                            2);
+                    }
+
                 }
 
                 _swRender.Restart();
@@ -226,16 +284,13 @@ namespace WpfApp1.ViewModels
                 DetectionsCount = detsSnapshot.Count;
             }
 
-            // =========================
-            // 3) 프레임 드랍으로 “실시간 재생처럼” 따라가기
-            // =========================
+            // 4) 프레임 드랍으로 따라가기
             _swTick.Stop();
             double spentMs = _swTick.Elapsed.TotalMilliseconds;
 
-            // 처리 시간이 목표(ms)보다 크면 그만큼 프레임을 스킵
             if (spentMs > targetMs)
             {
-                int needSkip = (int)(spentMs / targetMs) - 1; // -1: 이미 1프레임은 처리했으니까
+                int needSkip = (int)(spentMs / targetMs) - 1;
                 if (needSkip > 0)
                 {
                     needSkip = Math.Min(needSkip, MaxSkipFramesPerTick);
@@ -243,9 +298,7 @@ namespace WpfApp1.ViewModels
                 }
             }
 
-            // =========================
-            // 4) 로그(부하 최소): 2초마다 평균만
-            // =========================
+            // 5) 로그
             if (_swLog.ElapsedMilliseconds >= LogEveryMs)
             {
                 double avgInfer = _inferCount > 0 ? (double)_inferMsAcc / _inferCount : 0.0;
@@ -253,7 +306,8 @@ namespace WpfApp1.ViewModels
 
                 Debug.WriteLine(
                     $"[LOG] frames={_frameCount}, posFrame={_video.PosFrame}, posMs={_video.PosMsec:0}, " +
-                    $"dets={DetectionsCount}, avgInferMs={avgInfer:0.0}, avgRenderMs={avgRender:0.0}, " +
+                    $"dets={DetectionsCount}, tracks={_trackedObjects.Count}, " +
+                    $"avgInferMs={avgInfer:0.0}, avgRenderMs={avgRender:0.0}, " +
                     $"targetMs={targetMs:0.0}, tickMs={spentMs:0.0}"
                 );
 
@@ -264,6 +318,53 @@ namespace WpfApp1.ViewModels
                 _swLog.Restart();
             }
         }
+
+        private void TrackAndMatch(List<Detection> currentDetections, double timeMsec)
+        {
+            var unmatchedDetections = new List<Detection>(currentDetections);
+
+            // 1. 기존 트랙과 현재 감지 결과 매칭
+            foreach (var track in _trackedObjects.Values.ToList())
+            {
+                int bestMatchIndex = -1;
+                float bestIou = 0.0f;
+
+                for (int i = 0; i < unmatchedDetections.Count; i++)
+                {
+                    float iou = YoloV8Onnx.IoU(track.LastBox, unmatchedDetections[i].Box);
+                    if (iou > 0.3f && iou > bestIou)
+                    {
+                        bestIou = iou;
+                        bestMatchIndex = i;
+                    }
+                }
+
+                if (bestMatchIndex != -1)
+                {
+                    var matchedDetection = unmatchedDetections[bestMatchIndex];
+                    track.Update(matchedDetection, timeMsec);
+                    unmatchedDetections.RemoveAt(bestMatchIndex);
+                }
+                else
+                {
+                    track.Missed();
+                }
+            }
+
+            // 2. 매칭되지 않은 감지 결과는 새로운 트랙으로 추가
+            foreach (var det in unmatchedDetections)
+            {
+                if (det.ClassId == 2 || det.ClassId == 5 || det.ClassId == 7)
+                {
+                    var newTrack = new TrackedObject(det, timeMsec);
+                    _trackedObjects.Add(newTrack.Id, newTrack);
+                }
+            }
+
+            // 3. UI 업데이트
+            TrackedCountText = $"Tracks: {_trackedObjects.Count}";
+        }
+
 
         public void Dispose()
         {

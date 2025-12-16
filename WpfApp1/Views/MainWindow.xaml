@@ -16,6 +16,9 @@
 
             <TextBlock Margin="10,6,0,0" Text="{Binding VideoPath}"/>
             <TextBlock Margin="20,6,0,0" Text="{Binding StatusText}"/>
+
+            <TextBlock Margin="20,6,0,0" Text="{Binding TrackedCountText}"/>
+
             <TextBlock Margin="20,6,0,0" Text="Dets:"/>
             <TextBlock Margin="5,6,0,0" Text="{Binding DetectionsCount}"/>
         </StackPanel>

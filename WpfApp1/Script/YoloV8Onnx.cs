@@ -1,7 +1,7 @@
 ﻿using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using OpenCvSharp;
-using WpfApp1.Models;   // ✅ 추가
+using WpfApp1.Models;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -35,14 +35,14 @@ namespace WpfApp1
                 var inputTensor = RgbMatToTensorNchw(inputRgb);
 
                 var inputs = new List<NamedOnnxValue>
-                {
-                    NamedOnnxValue.CreateFromTensor(_inputName, inputTensor)
-                };
+        {
+          NamedOnnxValue.CreateFromTensor(_inputName, inputTensor)
+        };
 
                 using var results = _session.Run(inputs);
                 var output = results.First().AsTensor<float>(); // [1,84,8400]
 
-                var dets = ParseOutput_1x84x8400(output, bgr.Width, bgr.Height, scale, padX, padY);
+                var dets = ParseOutput_1x84x8400(output, bgr.Width, bgr.Height, scale, padX, padY);
                 return NmsByClass(dets, _nmsThres);
             }
             finally
@@ -51,8 +51,8 @@ namespace WpfApp1
             }
         }
 
-        // --- 이하 너 코드 그대로 ---
-        private static (Mat rgb, float scale, int padX, int padY) LetterboxToRgb(Mat bgr, int newSize)
+        // --- 이하 너 코드 그대로 ---
+        private static (Mat rgb, float scale, int padX, int padY) LetterboxToRgb(Mat bgr, int newSize)
         {
             Mat rgb = new();
             Cv2.CvtColor(bgr, rgb, ColorConversionCodes.BGR2RGB);
@@ -156,7 +156,8 @@ namespace WpfApp1
             return dets;
         }
 
-        private static float IoU(Rect a, Rect b)
+        // ✅ public static으로 변경됨
+        public static float IoU(Rect a, Rect b)
         {
             int x1 = Math.Max(a.X, b.X);
             int y1 = Math.Max(a.Y, b.Y);
