@@ -6,35 +6,41 @@
         xmlns:local="clr-namespace:WpfApp11"
         mc:Ignorable="d"
         Title="MainWindow" Height="450" Width="800">
-    <Grid Margin="10">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="*"/>
-            <ColumnDefinition Width="*"/>
-        </Grid.ColumnDefinitions>
+	<Grid Margin="15">
+		<Grid.RowDefinitions>
+			<RowDefinition Height="*"/>
+			<!-- 이미지 영역 -->
+			<RowDefinition Height="Auto"/>
+			<!-- 버튼 영역 -->
+		</Grid.RowDefinitions>
 
-        <!-- 제목 및 버튼 -->
-        <Button Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Content="이미지 불러오기 및 인식 시작" 
-                Margin="5" Padding="10" Click="RecognizeButton_Click"/>
+		<Grid Grid.Row="0">
+			<Grid.ColumnDefinitions>
+				<ColumnDefinition Width="*"/>
+				<ColumnDefinition Width="*"/>
+			</Grid.ColumnDefinitions>
 
-        <!-- 원본 사진 영역 -->
-        <TextBlock Grid.Row="1" Grid.Column="0" Text="[원본 사진]" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="5"/>
-        <Image x:Name="OriginalImageControl" Grid.Row="1" Grid.Column="0" Margin="5,25,5,5" Stretch="Uniform"/>
+			<!-- 원본 사진 영역 -->
+			<GroupBox Header="원본 사진" Grid.Column="0" Margin="5">
+				<Border Background="#EEEEEE" CornerRadius="5">
+					<Image x:Name="imgOriginal" Stretch="Uniform"/>
+				</Border>
+			</GroupBox>
 
-        <!-- 작업 후 사진 영역 -->
-        <TextBlock Grid.Row="1" Grid.Column="1" Text="[처리된 사진 (그레이스케일/이진화)]" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="5"/>
-        <Image x:Name="ProcessedImageControl" Grid.Row="1" Grid.Column="1" Margin="5,25,5,5" Stretch="Uniform"/>
+			<!-- 처리 결과 사진 영역 -->
+			<GroupBox Header="검출 결과 (8배 업스케일)" Grid.Column="1" Margin="5">
+				<Border Background="#EEEEEE" CornerRadius="5">
+					<Image x:Name="imgResult" Stretch="Uniform"/>
+				</Border>
+			</GroupBox>
+		</Grid>
 
-        <!-- 인식된 텍스트 결과 표시 -->
-        <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Text="[인식된 결과]" 
-                   FontWeight="Bold" Margin="5, 10, 5, 0"/>
-        <TextBox x:Name="ResultTextBox" Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2" 
-                 Height="100" Margin="5" Padding="5" TextWrapping="Wrap"
-                 IsReadOnly="True" VerticalScrollBarVisibility="Auto"/>
-    </Grid>
+		<!-- 하단 버튼 -->
+		<Button x:Name="BtnLoad" Grid.Row="1"
+                Content="이미지 불러오기 및 자동 검출"
+                Width="300" Height="50" Margin="0,15,0,0"
+                FontSize="18" FontWeight="Bold"
+                Click="BtnLoad_Click"/>
+		<TextBox HorizontalAlignment="Left" Margin="575,0,0,0" Grid.Row="1" TextWrapping="Wrap"  VerticalAlignment="Center" Width="120" x:Name="ResultTextBox"/>
+	</Grid>
 </Window>
