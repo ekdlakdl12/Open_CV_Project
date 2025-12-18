@@ -26,7 +26,6 @@ namespace WpfApp1.ViewModels
         private volatile bool _isBusy = false;
         private readonly DispatcherTimer _timer = new();
 
-        // UI 바인딩 속성
         private string _countText = "L:0 | F:0 | R:0";
         public string CountText { get => _countText; set { _countText = value; OnPropertyChanged(); } }
 
@@ -48,7 +47,6 @@ namespace WpfApp1.ViewModels
 
             try
             {
-                // 품질 개선을 위해 임계값을 0.25f로 재설정
                 _detector = new YoloDetectService(BaseOnnxPath, 640, 0.25f, 0.45f);
             }
             catch { }
@@ -67,7 +65,6 @@ namespace WpfApp1.ViewModels
                 Task.Run(() => {
                     try
                     {
-                        // 1. 추론 및 추적
                         var dets = _detector.Detect(clone);
                         lock (_lock)
                         {
@@ -81,11 +78,9 @@ namespace WpfApp1.ViewModels
 
             lock (_lock)
             {
-                // 2. 카운팅 및 시각화
                 UpdateCounting(_frame.Width, _frame.Height);
                 DrawOutput(_frame);
             }
-
             FrameImage = _frame.ToBitmapSource();
         }
 
@@ -146,10 +141,27 @@ namespace WpfApp1.ViewModels
             {
                 if (!_trackedObjects.TryGetValue(d.TrackId, out var track)) continue;
 
-                // 속도 보정 (8.0 계수 적용)
-                string info = $"ID:{track.Id} {(int)(track.RelativeSpeed * 8)}km/h";
+                // 1. 클래스 ID에 따른 차종 이름 매칭 (Car:2, Bus:5, Truck:7)
+                string typeName = d.ClassId switch
+                {
+                    2 => "Car",
+                    5 => "Bus",
+                    7 => "Truck",
+                    3 => "Motorcycle",
+                    _ => "Vehicle"
+                };
+
+                // 2. 출력 텍스트 구성 (이름 + ID + 속도)
+                string info = $"[{typeName}] ID:{track.Id} {(int)(track.RelativeSpeed * 8)}km/h";
+
+                // 3. 가독성을 위한 검은색 배경 박스 그리기
+                var textSize = Cv2.GetTextSize(info, HersheyFonts.HersheySimplex, 0.45, 1, out var baseline);
+                var textRect = new Rect(d.Box.X, d.Box.Y - textSize.Height - 10, textSize.Width + 10, textSize.Height + 5);
+                Cv2.Rectangle(frame, textRect, Scalar.Black, -1); // 배경 채우기
+
+                // 4. 노란색 테두리 및 라벨 텍스트 그리기
                 Cv2.Rectangle(frame, d.Box, Scalar.Yellow, 2);
-                Cv2.PutText(frame, info, new Point(d.Box.X, d.Box.Y - 10), HersheyFonts.HersheySimplex, 0.5, Scalar.Green, 2);
+                Cv2.PutText(frame, info, new Point(d.Box.X + 5, d.Box.Y - 7), HersheyFonts.HersheySimplex, 0.45, Scalar.Lime, 1);
             }
         }
 
