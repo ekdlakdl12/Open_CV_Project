@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="https://img.shields.io/badge/AI%20기반%20실시간%20차량%2F차선%20감지%20및%20분석%20시스템-24A19C?style=for-the-badge&logo=github&logoColor=white&labelColor=1F2328" alt="프로젝트명 배너" width="1600">
+  <img src="https://img.shields.io/badge/AI%20기반%20실시간%20차량%2F차선%20감지%20및%20분석%20시스템-24A19C?style=for-the-badge&logo=github&logoColor=white&labelColor=1F2328" alt="프로젝트명 배너" width="100%">
 </h1>
 
 <p align="center">
@@ -12,17 +12,13 @@
 
 **슬로건:** **고속도로의 평화 지키미.** (Police/Enforcement Support System)
 
-본 프로젝트는 **경찰차 또는 단속 차량**에 특화된 **지능형 차량 단속 및 증거 기록 시스템(ITS)** 구축을 목표로 합니다. 카메라 영상을 기반으로 실시간 교통 법규 위반 행위를 감지하고, 사고 및 위반 상황 발생 시 **법적 증거 자료**로 활용될 수 있는 고신뢰성 메타데이터를 기록합니다.
+본 프로젝트는 **경찰차 또는 단속 차량**에 특화된 **지능형 차량 단속 및 증거 기록 시스템(ITS)** 구축을 목표로 합니다. 실시간으로 교통 법규 위반 행위를 감지하고, 사고 및 위반 상황 발생 시 **법적 증거 자료**로 활용될 수 있는 고신뢰성 메타데이터를 기록합니다.
 
-### 🎯 핵심 목표
-* **단속 지원:** 실시간 위반 차량 식별 및 단속 효율 극대화.
-* **증거 확보:** 뺑소니 검거 및 과실 비율 책정을 위한 명확한 영상/데이터 제공.
-* **안전 확보:** 차량 간 거리(TTC) 분석을 통한 사고 위험 사전 경고.
-* **고정밀 인식:** 저화질 환경에서도 딥러닝(SR)을 통한 번호판 인식률 극대화.
+---
 
 ## 👥 팀 소개: Error 404: Sleep Not Found
 
-| <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTlvx9kKgphtqxjtyo02-hkg1Vc3retA_F-Ow&s" width="150"/> | <img src="https://i.pinimg.com/736x/cd/29/5b/cd295b740eb04c3ec4acdd6cb4f11f47.jpg" width="150"/> | <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQV4NYGjlzcTvxRY-mJC97tLv_7QrWDQjqNSQ&s" width="150"/> |
+| <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTlvx9kKgphtqxjtyo02-hkg1Vc3retA_F-Ow&s" width="300"/> | <img src="https://i.pinimg.com/736x/cd/29/5b/cd295b740eb04c3ec4acdd6cb4f11f47.jpg" width="300"/> | <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQV4NYGjlzcTvxRY-mJC97tLv_7QrWDQjqNSQ&s" width="300"/> |
 | :---: | :---: | :---: |
 | **최준영 (PM)** | **김준형** | **김진우** |
 | `팀장` | `팀원` | `팀원` |
