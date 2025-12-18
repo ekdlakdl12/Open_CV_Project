@@ -12,13 +12,17 @@ namespace WpfApp1.Script
     {
         private readonly InferenceSession _session;
         private readonly string _inputName;
+
         private readonly int _imgSize;
         private readonly float _confThres;
         private readonly float _nmsThres;
 
-        private const string OUT_DET = "det_out";
-        private const string OUT_DRIVE = "drive_area_seg";
-        private const string OUT_LANE = "lane_line_seg";
+        public sealed record YolopResult(
+            List<Detection> Detections,
+            Mat? DrivableMaskOrig,   // CV_8UC1 (0/255)
+            Mat? LaneMaskOrig,       // CV_8UC1 (0/255)
+            Mat? LaneProbOrig        // CV_32FC1 (0~1)
+        );
 
         public YolopOnnx(string onnxPath, int imgSize = 640, float confThres = 0.35f, float nmsThres = 0.45f)
         {
@@ -37,34 +41,33 @@ namespace WpfApp1.Script
             try
             {
                 var inputTensor = RgbMatToTensorNchw(inputRgb);
-                var inputs = new List<NamedOnnxValue> { NamedOnnxValue.CreateFromTensor(_inputName, inputTensor) };
 
-                using var results = _session.Run(inputs);
+                using var results = _session.Run(new[]
+                {
+                    NamedOnnxValue.CreateFromTensor(_inputName, inputTensor)
+                });
 
-                var det = results.First(r => r.Name == OUT_DET).AsTensor<float>();      // [1,25200,6]
-                var drive = results.First(r => r.Name == OUT_DRIVE).AsTensor<float>(); // [1,2,640,640]
-                var lane = results.First(r => r.Name == OUT_LANE).AsTensor<float>();   // [1,2,640,640]
+                // outputs: det_out [1,25200,6], drive_area_seg [1,2,640,640], lane_line_seg [1,2,640,640]
+                var detT = results.First(r => r.Name.Contains("det", StringComparison.OrdinalIgnoreCase)).AsTensor<float>();
+                var driveT = results.First(r => r.Name.Contains("drive", StringComparison.OrdinalIgnoreCase)).AsTensor<float>();
+                var laneT = results.First(r => r.Name.Contains("lane", StringComparison.OrdinalIgnoreCase)).AsTensor<float>();
 
-                // seg mask 640
-                using var driveMask640 = SegProbToMask(drive, thr: 0.48f, roiTopCut: 0.35);  // 도로는 넓게
-                using var laneMask640Raw = SegProbToMask(lane, thr: 0.60f, roiTopCut: 0.35); // 차선은 조금 빡세게
-
-                // 차선은 도로 내부로 제한
-                using var driveDilated = DilateMask(driveMask640, ksize: 17);
-                using var laneMask640 = new Mat();
-                Cv2.BitwiseAnd(laneMask640Raw, driveDilated, laneMask640);
-
-                PostProcessLaneInPlace(laneMask640);
-
-                // ✅ 언레터박스 → 원본 크기로 복원
-                var driveOrig = UnLetterboxMaskToOriginal(driveMask640, bgr.Width, bgr.Height, scale, padX, padY);
-                var laneOrig = UnLetterboxMaskToOriginal(laneMask640, bgr.Width, bgr.Height, scale, padX, padY);
-
-                // det
-                var dets = ParseDetections_1xNx6(det, bgr.Width, bgr.Height, scale, padX, padY);
+                // 1) Detection (우리는 지금 차량검출에 YOLOP det를 사용 안 하지만, 안전하게 반환은 해둠)
+                var dets = ParseDetOut(detT, bgr.Width, bgr.Height, scale, padX, padY, _confThres);
                 dets = NmsByClass(dets, _nmsThres);
 
-                return new YolopResult(dets, driveOrig, laneOrig);
+                // 2) Drive mask (argmax -> class=1)
+                using var driveMask640 = SegToBinaryMask(driveT, thrProb: 0.5f); // CV_8UC1 0/255
+                var driveOrig = UnLetterboxMaskToOriginal(driveMask640, bgr.Width, bgr.Height, scale, padX, padY);
+
+                // 3) Lane prob map (softmax prob of class=1)
+                using var laneProb640 = SegToProbMap(laneT); // CV_32FC1 0~1
+                var laneProbOrig = UnLetterboxProbToOriginal(laneProb640, bgr.Width, bgr.Height, scale, padX, padY);
+
+                // 4) Lane mask (prob -> threshold)
+                var laneOrig = ProbToBinaryMask(laneProbOrig, thr: 0.50f); // 기본값(표시용)
+
+                return new YolopResult(dets, driveOrig, laneOrig, laneProbOrig);
             }
             finally
             {
@@ -72,13 +75,9 @@ namespace WpfApp1.Script
             }
         }
 
-        public sealed record YolopResult(
-            List<Detection> Detections,
-            Mat? DrivableMaskOrig, // 원본 크기 CV_8UC1
-            Mat? LaneMaskOrig      // 원본 크기 CV_8UC1
-        );
-
-        // ---------- preprocess ----------
+        // =========================
+        // Preprocess
+        // =========================
         private static (Mat rgb, float scale, int padX, int padY) LetterboxToRgb(Mat bgr, int newSize)
         {
             Mat rgb = new();
@@ -108,10 +107,14 @@ namespace WpfApp1.Script
             int h = rgb.Rows;
             int w = rgb.Cols;
 
+            if (rgb.Type() != MatType.CV_8UC3)
+                throw new Exception($"Unexpected MatType: {rgb.Type()} (expected CV_8UC3)");
+
             var tensor = new DenseTensor<float>(new[] { 1, 3, h, w });
             var idx = rgb.GetGenericIndexer<Vec3b>();
 
             for (int y = 0; y < h; y++)
+            {
                 for (int x = 0; x < w; x++)
                 {
                     Vec3b p = idx[y, x];
@@ -119,94 +122,25 @@ namespace WpfApp1.Script
                     tensor[0, 1, y, x] = p.Item1 / 255f;
                     tensor[0, 2, y, x] = p.Item2 / 255f;
                 }
+            }
             return tensor;
         }
 
-        // ---------- seg post ----------
-        private static Mat SegProbToMask(Tensor<float> seg, float thr, double roiTopCut)
+        // =========================
+        // Postprocess: Det
+        // =========================
+        private static List<Detection> ParseDetOut(Tensor<float> det, int origW, int origH, float scale, int padX, int padY, float confThres)
         {
-            // seg: [1,2,H,W]
-            int h = seg.Dimensions[2];
-            int w = seg.Dimensions[3];
-
-            Mat mask = new Mat(h, w, MatType.CV_8UC1, Scalar.Black);
-
-            for (int y = 0; y < h; y++)
-                for (int x = 0; x < w; x++)
-                {
-                    float a = seg[0, 0, y, x];
-                    float b = seg[0, 1, y, x];
-
-                    float m = Math.Max(a, b);
-                    float ea = (float)Math.Exp(a - m);
-                    float eb = (float)Math.Exp(b - m);
-                    float p1 = eb / (ea + eb);
-
-                    mask.Set(y, x, (byte)(p1 >= thr ? 255 : 0));
-                }
-
-            int cutY = (int)(h * roiTopCut);
-            using (var top = new Mat(mask, new Rect(0, 0, w, cutY)))
-                top.SetTo(0);
-
-            return mask;
-        }
-
-        private static Mat DilateMask(Mat m, int ksize)
-        {
-            var outm = new Mat();
-            using var k = Cv2.GetStructuringElement(MorphShapes.Ellipse, new Size(ksize, ksize));
-            Cv2.Dilate(m, outm, k);
-            return outm;
-        }
-
-        private static void PostProcessLaneInPlace(Mat laneMask)
-        {
-            using (var k1 = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(5, 5)))
-                Cv2.MorphologyEx(laneMask, laneMask, MorphTypes.Open, k1);
-
-            using (var k2 = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(11, 11)))
-                Cv2.MorphologyEx(laneMask, laneMask, MorphTypes.Close, k2);
-
-            using var labels = new Mat();
-            using var stats = new Mat();
-            using var centroids = new Mat();
-
-            Cv2.ConnectedComponentsWithStats(laneMask, labels, stats, centroids);
-
-            int nLabels = stats.Rows;
-            for (int i = 1; i < nLabels; i++)
-            {
-                int area = stats.At<int>(i, (int)ConnectedComponentsTypes.Area);
-                if (area < 500)
-                {
-                    using var compMask = new Mat();
-                    Cv2.Compare(labels, i, compMask, CmpType.EQ);
-                    laneMask.SetTo(Scalar.All(0), compMask);
-                }
-            }
-        }
-
-        private static Mat UnLetterboxMaskToOriginal(Mat mask640, int origW, int origH, float scale, int padX, int padY)
-        {
-            int newW = (int)Math.Round(origW * scale);
-            int newH = (int)Math.Round(origH * scale);
-
-            var roi = new Rect(padX, padY, newW, newH);
-            roi = roi.Intersect(new Rect(0, 0, mask640.Width, mask640.Height));
-
-            using var cropped = new Mat(mask640, roi);
-
-            var outMask = new Mat();
-            Cv2.Resize(cropped, outMask, new Size(origW, origH), 0, 0, InterpolationFlags.Nearest);
-            return outMask;
-        }
-
-        // ---------- det post ----------
-        private List<Detection> ParseDetections_1xNx6(Tensor<float> det, int origW, int origH, float scale, int padX, int padY)
-        {
-            var dets = new List<Detection>(256);
+            // det: [1,25200,6]
             int n = det.Dimensions[1];
+            var list = new List<Detection>(128);
+
+            // 값이 0~1로 나오는 모델도 있어서 자동 보정
+            float maxCoord = 0f;
+            for (int i = 0; i < Math.Min(n, 200); i++)
+                maxCoord = Math.Max(maxCoord, Math.Max(det[0, i, 2], det[0, i, 3]));
+
+            bool normalized = maxCoord <= 1.5f;
 
             for (int i = 0; i < n; i++)
             {
@@ -214,11 +148,17 @@ namespace WpfApp1.Script
                 float y1 = det[0, i, 1];
                 float x2 = det[0, i, 2];
                 float y2 = det[0, i, 3];
-                float conf = det[0, i, 4];
+                float score = det[0, i, 4];
                 int cls = (int)det[0, i, 5];
 
-                if (conf < _confThres) continue;
+                if (score < confThres) continue;
 
+                if (normalized)
+                {
+                    x1 *= 640f; y1 *= 640f; x2 *= 640f; y2 *= 640f;
+                }
+
+                // unletterbox: (x - pad)/scale
                 x1 = (x1 - padX) / scale;
                 y1 = (y1 - padY) / scale;
                 x2 = (x2 - padX) / scale;
@@ -233,13 +173,13 @@ namespace WpfApp1.Script
                 int ry = (int)y1;
                 int rw = (int)(x2 - x1);
                 int rh = (int)(y2 - y1);
+
                 if (rw < 10 || rh < 10) continue;
 
-                // 팀원 Detection 생성자(Rect,int,float) 맞춤
-                dets.Add(new Detection(new Rect(rx, ry, rw, rh), cls, conf));
+                list.Add(new Detection(new Rect(rx, ry, rw, rh), cls, score));
             }
 
-            return dets;
+            return list;
         }
 
         private static float IoU(Rect a, Rect b)
@@ -278,6 +218,88 @@ namespace WpfApp1.Script
             }
 
             return result;
+        }
+
+        // =========================
+        // Postprocess: Segmentation
+        // =========================
+        private static Mat SegToProbMap(Tensor<float> seg)
+        {
+            // seg: [1,2,H,W] logits -> softmax prob(class=1)
+            int h = seg.Dimensions[2];
+            int w = seg.Dimensions[3];
+
+            var prob = new Mat(h, w, MatType.CV_32FC1);
+
+            for (int y = 0; y < h; y++)
+            {
+                for (int x = 0; x < w; x++)
+                {
+                    float a = seg[0, 0, y, x];
+                    float b = seg[0, 1, y, x];
+
+                    float m = Math.Max(a, b);
+                    float ea = (float)Math.Exp(a - m);
+                    float eb = (float)Math.Exp(b - m);
+                    float p1 = eb / (ea + eb);
+
+                    prob.Set(y, x, p1);
+                }
+            }
+
+            return prob;
+        }
+
+        private static Mat SegToBinaryMask(Tensor<float> seg, float thrProb = 0.5f)
+        {
+            // drive/lane logits -> prob -> threshold -> mask
+            using var prob = SegToProbMap(seg);
+            return ProbToBinaryMask(prob, thrProb);
+        }
+
+        private static Mat ProbToBinaryMask(Mat prob, float thr)
+        {
+            // prob: CV_32FC1 (0~1) -> CV_8UC1 0/255
+            var mask = new Mat(prob.Rows, prob.Cols, MatType.CV_8UC1);
+            for (int y = 0; y < prob.Rows; y++)
+            {
+                for (int x = 0; x < prob.Cols; x++)
+                {
+                    float p = prob.At<float>(y, x);
+                    mask.Set(y, x, (byte)(p >= thr ? 255 : 0));
+                }
+            }
+            return mask;
+        }
+
+        private static Mat UnLetterboxMaskToOriginal(Mat mask640, int origW, int origH, float scale, int padX, int padY)
+        {
+            int newW = (int)Math.Round(origW * scale);
+            int newH = (int)Math.Round(origH * scale);
+
+            var roi = new Rect(padX, padY, newW, newH);
+            roi = roi.Intersect(new Rect(0, 0, mask640.Width, mask640.Height));
+
+            using var cropped = new Mat(mask640, roi);
+
+            var outMask = new Mat();
+            Cv2.Resize(cropped, outMask, new Size(origW, origH), 0, 0, InterpolationFlags.Nearest);
+            return outMask;
+        }
+
+        private static Mat UnLetterboxProbToOriginal(Mat prob640, int origW, int origH, float scale, int padX, int padY)
+        {
+            int newW = (int)Math.Round(origW * scale);
+            int newH = (int)Math.Round(origH * scale);
+
+            var roi = new Rect(padX, padY, newW, newH);
+            roi = roi.Intersect(new Rect(0, 0, prob640.Width, prob640.Height));
+
+            using var cropped = new Mat(prob640, roi);
+
+            var outProb = new Mat();
+            Cv2.Resize(cropped, outProb, new Size(origW, origH), 0, 0, InterpolationFlags.Linear);
+            return outProb;
         }
 
         public void Dispose() => _session.Dispose();

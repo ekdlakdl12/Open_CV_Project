@@ -24,8 +24,10 @@ namespace WpfApp1.ViewModels
         // ===== 추가 YOLOP(차선/도로 시각화만) =====
         private const string YolopOnnxPath = "Scripts/yolop-640-640.onnx";
         private YolopDetectService? _yolop;
-        private Mat? _driveMask;   // 원본 프레임 크기 CV_8UC1
-        private Mat? _laneMask;    // 원본 프레임 크기 CV_8UC1
+
+        private Mat? _driveMask;   // CV_8UC1 0/255 (원본 크기)
+        private Mat? _laneMask;    // CV_8UC1 0/255 (원본 크기) - 기본 thr=0.50로 만들어둔 것
+        private Mat? _laneProb;    // CV_32FC1 0~1 (원본 크기) ✅ 핵심(기준 확인용)
 
         private readonly Mat _frame = new();
         private readonly Dictionary<int, TrackedObject> _trackedObjects = new();
@@ -39,7 +41,7 @@ namespace WpfApp1.ViewModels
         private readonly IMongoCollection<VehicleRecord>? _collection;
 
         // =========================
-        // UI 바인딩 속성 (XAML에서 쓰는 것들)
+        // UI 바인딩 속성
         // =========================
         private string _videoPath = "";
         public string VideoPath { get => _videoPath; set { _videoPath = value; OnPropertyChanged(); } }
@@ -53,7 +55,6 @@ namespace WpfApp1.ViewModels
         private int _detectionsCount = 0;
         public int DetectionsCount { get => _detectionsCount; set { _detectionsCount = value; OnPropertyChanged(); } }
 
-        // 기존 UI 바인딩
         private string _countText = "L:0 | F:0 | R:0";
         public string CountText { get => _countText; set { _countText = value; OnPropertyChanged(); } }
 
@@ -81,26 +82,22 @@ namespace WpfApp1.ViewModels
             }
             catch { }
 
-            InitializeDetector(); // ✅ 기존 YOLOv8
-            InitializeYolop();    // ✅ YOLOP 추가(차선/도로만)
+            InitializeDetector();
+            InitializeYolop();
         }
 
         private void InitializeDetector()
         {
             string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, BaseOnnxPath);
             if (File.Exists(fullPath))
-            {
                 _detector = new YoloDetectService(fullPath, 640, 0.25f, 0.45f);
-            }
         }
 
         private void InitializeYolop()
         {
             string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, YolopOnnxPath);
             if (File.Exists(fullPath))
-            {
                 _yolop = new YolopDetectService(fullPath, 640, 0.35f, 0.45f);
-            }
         }
 
         private void Timer_Tick(object? sender, EventArgs e)
@@ -119,15 +116,17 @@ namespace WpfApp1.ViewModels
                 {
                     try
                     {
-                        var r = _yolop.Infer(laneFrame); // drive/lane mask (원본 크기) + det는 여기서 사용 안 함
+                        var r = _yolop.Infer(laneFrame);
 
                         lock (_lock)
                         {
                             _driveMask?.Dispose();
                             _laneMask?.Dispose();
+                            _laneProb?.Dispose();
 
                             _driveMask = r.DrivableMaskOrig;
                             _laneMask = r.LaneMaskOrig;
+                            _laneProb = r.LaneProbOrig; // ✅ 핵심
                         }
                     }
                     catch { }
@@ -140,7 +139,7 @@ namespace WpfApp1.ViewModels
             }
 
             // =========================
-            // 2) YOLOv8 (차량 검출/차종/트래킹/카운트/속도/DB) - 기존 그대로 유지
+            // 2) YOLOv8 (차량 기능) - 기존 그대로 유지
             // =========================
             if (!_isBusy && _detector != null)
             {
@@ -281,7 +280,7 @@ namespace WpfApp1.ViewModels
 
         private void DrawOutput(Mat frame)
         {
-            // ✅ (추가) YOLOP 도로/차선 오버레이만 “추가”
+            // ✅ 도로 오버레이(기존처럼 유지)
             if (_driveMask != null && !_driveMask.Empty())
             {
                 using var overlay = frame.Clone();
@@ -289,12 +288,67 @@ namespace WpfApp1.ViewModels
                 Cv2.AddWeighted(overlay, 0.20, frame, 0.80, 0, frame);
             }
 
-            if (_laneMask != null && !_laneMask.Empty())
+            // ✅ "차선이 어떤 기준으로 잡히는지" 확인용 패널 (확률 히트맵 + threshold 비교)
+            if (_laneProb != null && !_laneProb.Empty())
             {
-                // 차선은 두꺼운 면보다 edge가 보기 좋음
-                using var edges = new Mat();
-                Cv2.Canny(_laneMask, edges, 50, 150);
-                frame.SetTo(new Scalar(0, 0, 255), edges);
+                // 1) prob(0~1) -> 8U(0~255)
+                using var prob8u = new Mat();
+                _laneProb.ConvertTo(prob8u, MatType.CV_8UC1, 255.0);
+
+                // 2) heatmap
+                using var heat = new Mat();
+                Cv2.ApplyColorMap(prob8u, heat, ColormapTypes.Jet);
+
+                // 3) threshold 3개 마스크
+                using var m35 = new Mat();
+                using var m50 = new Mat();
+                using var m65 = new Mat();
+                Cv2.Threshold(prob8u, m35, 255 * 0.35, 255, ThresholdTypes.Binary);
+                Cv2.Threshold(prob8u, m50, 255 * 0.50, 255, ThresholdTypes.Binary);
+                Cv2.Threshold(prob8u, m65, 255 * 0.65, 255, ThresholdTypes.Binary);
+
+                // (선택) 메인 화면 차선은 thr=0.50 마스크를 “빨강 면”으로 덮어 표시
+                {
+                    using var laneOverlay = frame.Clone();
+                    laneOverlay.SetTo(new Scalar(0, 0, 255), m50); // 빨강
+                    Cv2.AddWeighted(laneOverlay, 0.15, frame, 0.85, 0, frame);
+                }
+
+                // 4) 미니패널 배치(좌상단)
+                int panelW = 320;
+                int panelH = (int)(panelW * (frame.Height / (double)frame.Width));
+
+                using var heatS = new Mat(); Cv2.Resize(heat, heatS, new Size(panelW, panelH));
+                using var m35S = new Mat(); Cv2.Resize(m35, m35S, new Size(panelW, panelH), 0, 0, InterpolationFlags.Nearest);
+                using var m50S = new Mat(); Cv2.Resize(m50, m50S, new Size(panelW, panelH), 0, 0, InterpolationFlags.Nearest);
+                using var m65S = new Mat(); Cv2.Resize(m65, m65S, new Size(panelW, panelH), 0, 0, InterpolationFlags.Nearest);
+
+                using var m35B = new Mat(); Cv2.CvtColor(m35S, m35B, ColorConversionCodes.GRAY2BGR);
+                using var m50B = new Mat(); Cv2.CvtColor(m50S, m50B, ColorConversionCodes.GRAY2BGR);
+                using var m65B = new Mat(); Cv2.CvtColor(m65S, m65B, ColorConversionCodes.GRAY2BGR);
+
+                var r0 = new Rect(10, 10, panelW, panelH);
+                var r1 = new Rect(10, 20 + panelH, panelW, panelH);
+                var r2 = new Rect(10, 30 + panelH * 2, panelW, panelH);
+                var r3 = new Rect(10, 40 + panelH * 3, panelW, panelH);
+
+                // 화면 밖으로 나가면 패널 축소(해상도 낮을 때 보호)
+                if (r3.Bottom < frame.Height)
+                {
+                    heatS.CopyTo(new Mat(frame, r0));
+                    m35B.CopyTo(new Mat(frame, r1));
+                    m50B.CopyTo(new Mat(frame, r2));
+                    m65B.CopyTo(new Mat(frame, r3));
+
+                    Cv2.PutText(frame, "LaneProb heatmap", new Point(r0.X + 5, r0.Y + 22),
+                        HersheyFonts.HersheySimplex, 0.6, Scalar.White, 2);
+                    Cv2.PutText(frame, "thr=0.35", new Point(r1.X + 5, r1.Y + 22),
+                        HersheyFonts.HersheySimplex, 0.6, Scalar.White, 2);
+                    Cv2.PutText(frame, "thr=0.50", new Point(r2.X + 5, r2.Y + 22),
+                        HersheyFonts.HersheySimplex, 0.6, Scalar.White, 2);
+                    Cv2.PutText(frame, "thr=0.65", new Point(r3.X + 5, r3.Y + 22),
+                        HersheyFonts.HersheySimplex, 0.6, Scalar.White, 2);
+                }
             }
 
             // ✅ (기존) 차량 박스/속도 표기 - 절대 변경 없음
@@ -333,9 +387,9 @@ namespace WpfApp1.ViewModels
                 DetectionsCount = 0;
                 TrackedCountText = "Tracked: 0";
 
-                // seg masks reset
                 _driveMask?.Dispose(); _driveMask = null;
                 _laneMask?.Dispose(); _laneMask = null;
+                _laneProb?.Dispose(); _laneProb = null;
 
                 _timer.Start();
             }
@@ -358,6 +412,7 @@ namespace WpfApp1.ViewModels
             _yolop?.Dispose();
             _driveMask?.Dispose();
             _laneMask?.Dispose();
+            _laneProb?.Dispose();
         }
     }
 }
