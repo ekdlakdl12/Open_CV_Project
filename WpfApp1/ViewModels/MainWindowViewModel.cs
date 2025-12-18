@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using System.Linq;
+using System.IO;
 
 namespace WpfApp1.ViewModels
 {
@@ -26,7 +27,8 @@ namespace WpfApp1.ViewModels
         private volatile bool _isBusy = false;
         private readonly DispatcherTimer _timer = new();
 
-        private string _countText = "L:0 | F:0 | R:0";
+        // UI 바인딩 속성
+        private string _countText = "L:0 | F:0 | R:0 | Dets:0";
         public string CountText { get => _countText; set { _countText = value; OnPropertyChanged(); } }
 
         private int _countL = 0, _countF = 0, _countR = 0;
@@ -47,9 +49,17 @@ namespace WpfApp1.ViewModels
 
             try
             {
-                _detector = new YoloDetectService(BaseOnnxPath, 640, 0.25f, 0.45f);
+                // 경로 체크 후 로드
+                string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, BaseOnnxPath);
+                if (File.Exists(fullPath))
+                    _detector = new YoloDetectService(fullPath, 640, 0.25f, 0.45f);
+                else
+                    CountText = "Error: Model file not found";
             }
-            catch { }
+            catch (Exception ex)
+            {
+                CountText = $"Error: {ex.Message}";
+            }
         }
 
         private void Timer_Tick(object? sender, EventArgs e)
@@ -89,7 +99,7 @@ namespace WpfApp1.ViewModels
             var usedDets = new HashSet<int>();
             foreach (var track in _trackedObjects.Values.ToList())
             {
-                int bestIdx = -1; float bestIou = 0.25f;
+                int bestIdx = -1; float bestIou = 0.35f; // 매칭 임계값 강화 (ID 스위칭 방지)
                 for (int i = 0; i < detections.Count; i++)
                 {
                     if (usedDets.Contains(i)) continue;
@@ -129,7 +139,7 @@ namespace WpfApp1.ViewModels
                     _countedIds.Add(track.Id);
                 }
             }
-            CountText = $"L:{_countL} | F:{_countF} | R:{_countR} | Active:{_currentDetections.Count}";
+            CountText = $"L:{_countL} | F:{_countF} | R:{_countR} | Dets:{_currentDetections.Count}";
         }
 
         private void DrawOutput(Mat frame)
@@ -141,26 +151,31 @@ namespace WpfApp1.ViewModels
             {
                 if (!_trackedObjects.TryGetValue(d.TrackId, out var track)) continue;
 
-                // 1. 클래스 ID에 따른 차종 이름 매칭 (Car:2, Bus:5, Truck:7)
+                // 1. 차종 분류 (Car:2, Bus:5, Truck:7)
                 string typeName = d.ClassId switch
                 {
                     2 => "Car",
                     5 => "Bus",
                     7 => "Truck",
-                    3 => "Motorcycle",
+                    3 => "Motor",
                     _ => "Vehicle"
                 };
 
-                // 2. 출력 텍스트 구성 (이름 + ID + 속도)
-                string info = $"[{typeName}] ID:{track.Id} {(int)(track.RelativeSpeed * 8)}km/h";
+                // 2. 속도 보정 (현실적인 속도 필터링)
+                // 8.0 계수는 픽셀거리를 km/h로 임의 환산한 값임
+                double speed = track.RelativeSpeed * 8.0;
 
-                // 3. 가독성을 위한 검은색 배경 박스 그리기
-                var textSize = Cv2.GetTextSize(info, HersheyFonts.HersheySimplex, 0.45, 1, out var baseline);
-                var textRect = new Rect(d.Box.X, d.Box.Y - textSize.Height - 10, textSize.Width + 10, textSize.Height + 5);
-                Cv2.Rectangle(frame, textRect, Scalar.Black, -1); // 배경 채우기
+                if (speed > 180) speed = 0; // ID 스위칭으로 인한 튀는 현상 제거
+                if (speed < 3) speed = 0;   // 정지 상태 미세 흔들림 제거
 
-                // 4. 노란색 테두리 및 라벨 텍스트 그리기
-                Cv2.Rectangle(frame, d.Box, Scalar.Yellow, 2);
+                string info = $"[{typeName}] ID:{track.Id} {(int)speed}km/h";
+
+                // 3. 가독성 개선 (검은색 배경 박스 + 라임색 텍스트)
+                var textSize = Cv2.GetTextSize(info, HersheyFonts.HersheySimplex, 0.45, 1, out _);
+                var bgRect = new Rect(d.Box.X, d.Box.Y - textSize.Height - 10, textSize.Width + 10, textSize.Height + 5);
+
+                Cv2.Rectangle(frame, bgRect, Scalar.Black, -1); // 배경
+                Cv2.Rectangle(frame, d.Box, Scalar.Yellow, 2);  // 노란 박스
                 Cv2.PutText(frame, info, new Point(d.Box.X + 5, d.Box.Y - 7), HersheyFonts.HersheySimplex, 0.45, Scalar.Lime, 1);
             }
         }
