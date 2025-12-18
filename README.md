@@ -55,14 +55,12 @@
 | 7 | **전방 및 좌우 차량대수 카운팅** | 영상 내 차량 객체를 실시간으로 탐지하여 전방 좌우측 차량대수를 계산함. |
 
 ---
-## 🛠️ 기술 스택 (Tech Stack)
-
 ### 💻 개발 환경 및 기술
 
 | 구분 | 기술 스택 (Tech Stack) | 용도 |
 | :--- | :--- | :--- |
 | **주요 언어** | <img src="https://img.shields.io/badge/C%23-239120?style=for-the-badge&logo=c-sharp&logoColor=white"/> <img src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white"/> | 시스템 통합 (C#) 및 핵심 알고리즘 개발 (Python) |
-| **딥러닝 프레임워크** | <img src="https://img.shields.io/badge/Yolo-000000?style=for-the-badge&logo=yolo&logoColor=white"/> `PyTorch` | 객체 탐지 및 분류 (차량, 번호판) 및 딥러닝 기반 차선 분할 |
+| **딥러닝 프레임워크** | <img src="https://img.shields.io/badge/YOLO-00599C?style=for-the-badge&logo=yolo&logoColor=white"/> <img src="https://img.shields.io/badge/PyTorch-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white"/> | 객체 탐지 및 분류 (차량, 번호판) 및 딥러닝 기반 차선 분할 |
 | **이미지/영상 처리** | <img src="https://img.shields.io/badge/OpenCV-5C3EE8?style=for-the-badge&logo=opencv&logoColor=white"/> | 카메라 영상 데이터 전처리, 기하학적 변환, 추적 및 속도/거리 측정 |
 | **데이터베이스** | <img src="https://img.shields.io/badge/MySQL-4479A1?style=for-the-badge&logo=mysql&logoColor=white"/> <img src="https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white"/> | 차량 탐지 이력, 번호판 텍스트 및 메타데이터 저장/관리 |
 | **형상 관리** | <img src="https://img.shields.io/badge/Git-F05032?style=for-the-badge&logo=git&logoColor=white"/> <img src="https://img.shields.io/badge/GitHub-100000?style=for-the-badge&logo=github&logoColor=white"/> | 소스 코드 버전 관리 및 협업 |
