@@ -22,12 +22,7 @@
 
 ---
 
-## 👥 팀 소개: Error 404: Sleep Not Found
-
-| <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTlvx9kKgphtqxjtyo02-hkg1Vc3retA_F-Ow&s" width="150"/> | <img src="https://i.pinimg.com/736x/cd/29/5b/cd295b740eb04c3ec4acdd6cb4f11f47.jpg" width="150"/> | <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQV4NYGjlzcTvxRY-mJC97tLv_7QrWDQjqNSQ&s" width="150"/> |
-| :---: | :---: | :---: |
-| **최준영 (PM)** | **김준형** | **김진우** |
-| `System Architecture` | `AI Algorithm` | `Image Processing` |
+## 👥 팀 소개: Error 404: 원` |
 | [GitHub](https://github.com/ekdlakdl12/Open_CV_Project) | [GitHub](https://github.com/Kim-Junghyeong) | [GitHub](https://github.com/potoblue) |
 
 ---
