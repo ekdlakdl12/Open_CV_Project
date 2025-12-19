@@ -8,24 +8,57 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <StackPanel Orientation="Horizontal" Margin="8">
-            <Button Content="동영상 불러오기" Width="140" Height="32"
-                    Command="{Binding OpenVideoCommand}"/>
-            <Button Content="정지" Width="80" Height="32" Margin="8,0,0,0"
-                    Command="{Binding StopCommand}"/>
+        <!-- Top bar -->
+        <DockPanel Grid.Row="0" Margin="8">
+            <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                <Button Content="동영상 불러오기" Width="140" Height="32"
+                        Margin="0,0,6,0"
+                        Command="{Binding OpenVideoCommand}" />
+                <Button Content="정지" Width="80" Height="32"
+                        Command="{Binding StopCommand}" />
+            </StackPanel>
 
-            <TextBlock Margin="10,6,0,0" Text="{Binding VideoPath}"/>
-            <TextBlock Margin="20,6,0,0" Text="{Binding StatusText}"/>
+            <!-- ✅ Lane UI -->
+            <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
+                <TextBlock Text="전체 차선:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                <ComboBox Width="70" Height="28" Margin="0,0,14,0"
+                          ItemsSource="{Binding TotalLaneOptions}"
+                          SelectedItem="{Binding TotalLanes, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
 
-            <TextBlock Margin="20,6,0,0" Text="{Binding TrackedCountText}"/>
+                <TextBlock Text="주행 차선:" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                <ComboBox Width="70" Height="28" Margin="0,0,14,0"
+                          ItemsSource="{Binding CurrentLaneOptions}"
+                          SelectedItem="{Binding CurrentLane, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
 
-            <TextBlock Margin="20,6,0,0" FontWeight="Bold" Text="{Binding CountText}"/>
+                <TextBlock Text="{Binding CurrentLaneLabel}" VerticalAlignment="Center"/>
+            </StackPanel>
 
-            <TextBlock Margin="20,6,0,0" Text="Dets:"/>
-            <TextBlock Margin="5,6,0,0" Text="{Binding DetectionsCount}"/>
-        </StackPanel>
+            <!-- Status -->
+            <TextBlock DockPanel.Dock="Left"
+                       Margin="12,0,0,0"
+                       VerticalAlignment="Center"
+                       Text="{Binding VideoPath}" />
+            <TextBlock DockPanel.Dock="Left"
+                       Margin="12,0,0,0"
+                       VerticalAlignment="Center"
+                       Text="{Binding StatusText}" />
+            <TextBlock DockPanel.Dock="Left"
+                       Margin="12,0,0,0"
+                       VerticalAlignment="Center"
+                       Text="{Binding TrackedCountText}" />
+            <TextBlock DockPanel.Dock="Left"
+                       Margin="12,0,0,0"
+                       VerticalAlignment="Center"
+                       Text="{Binding CountText}" />
+            <TextBlock DockPanel.Dock="Left"
+                       Margin="12,0,0,0"
+                       VerticalAlignment="Center"
+                       Text="{Binding DetectionsCount, StringFormat=Dets: {0}}" />
+        </DockPanel>
 
-        <Image Grid.Row="1" Stretch="Uniform"
-               Source="{Binding FrameImage}"/>
+        <!-- Video -->
+        <Border Grid.Row="1" Background="Black">
+            <Image Stretch="Uniform" Source="{Binding FrameImage}" />
+        </Border>
     </Grid>
 </Window>
