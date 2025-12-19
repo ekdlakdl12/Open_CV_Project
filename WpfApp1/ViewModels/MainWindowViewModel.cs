@@ -24,7 +24,7 @@ namespace WpfApp1.ViewModels
         private InferenceSession? _classSession;
         private readonly object _sessionLock = new object();
 
-        // Stanford Cars 196 클래스 리스트 (생략 없이 유지 필수)
+        // 차량 상세 모델 리스트 (CAR 클래스일 때만 사용)
         private readonly string[] _carModelNames = {
             "AM General Hummer SUV 2000", "Acura RL Sedan 2012", "Acura TL Sedan 2012", "Acura TL Type-S 2008",
             "Acura TSX Sedan 2012", "Acura Integra Type R 2001", "Acura ZDX Hatchback 2012", "Aston Martin V8 Vantage Convertible 2012",
@@ -81,11 +81,13 @@ namespace WpfApp1.ViewModels
         };
 
         private readonly ConcurrentDictionary<int, string> _modelCache = new();
+        private readonly ConcurrentDictionary<int, Scalar> _colorCache = new();
         private readonly Dictionary<int, TrackedObject> _trackedObjects = new();
         private List<Detection> _currentDetections = new();
         private readonly Mat _frame = new();
         private volatile bool _isBusy = false;
         private readonly DispatcherTimer _timer = new();
+        private readonly Random _rand = new();
 
         private int _countL = 0, _countF = 0, _countR = 0;
         private readonly HashSet<int> _countedIds = new();
@@ -119,15 +121,23 @@ namespace WpfApp1.ViewModels
             }
         }
 
-        // [핵심 수정] Index Error 방지를 위해 텐서 출력 형식을 올바르게 파싱
         private string GetSpecificCarModel(Mat cropImg)
         {
-            if (_classSession == null) return "Model Error";
+            if (_classSession == null) return "...";
             try
             {
+                using var rgbImg = new Mat();
+                Cv2.CvtColor(cropImg, rgbImg, ColorConversionCodes.BGR2RGB);
+
+                // 전처리 (샤프닝)
+                using var sharpened = new Mat();
+                float[] kernelData = { 0, -1, 0, -1, 5, -1, 0, -1, 0 };
+                using var kernel = new Mat(3, 3, MatType.CV_32F);
+                kernel.SetArray<float>(kernelData);
+                Cv2.Filter2D(rgbImg, sharpened, -1, kernel);
+
                 using var resized = new Mat();
-                Cv2.Resize(cropImg, resized, new Size(160, 160)); // 학습 이미지 규격
-                Cv2.CvtColor(resized, resized, ColorConversionCodes.BGR2RGB);
+                Cv2.Resize(sharpened, resized, new Size(160, 160), 0, 0, InterpolationFlags.Lanczos4);
 
                 var input = new DenseTensor<float>(new[] { 1, 3, 160, 160 });
                 var indexer = resized.GetGenericIndexer<Vec3b>();
@@ -145,33 +155,16 @@ namespace WpfApp1.ViewModels
                     using var results = _classSession.Run(new[] { NamedOnnxValue.CreateFromTensor(_classSession.InputMetadata.Keys.First(), input) });
                     var output = results.First().AsTensor<float>();
 
-                    // 출력 Shape이 (1, 210, 525)인 경우를 처리
-                    // 인덱스 4번부터 클래스 확률이 시작됨
-                    int bestClassIdx = -1;
-                    float maxScore = -1.0f;
-
-                    // 525개의 앵커 박스 중 각 클래스 확률(4번 인덱스 이후)이 가장 높은 것을 탐색
+                    float[] scores = new float[206];
                     for (int i = 0; i < 525; i++)
-                    {
-                        for (int c = 0; c < _carModelNames.Length; c++)
-                        {
-                            // 210행 중 4+c행이 해당 클래스의 확률값 위치
-                            float score = output[0, 4 + c, i];
-                            if (score > maxScore)
-                            {
-                                maxScore = score;
-                                bestClassIdx = c;
-                            }
-                        }
-                    }
+                        for (int c = 0; c < 206; c++)
+                            scores[c] += output[0, 4 + c, i];
 
-                    if (bestClassIdx >= 0 && bestClassIdx < _carModelNames.Length)
-                        return _carModelNames[bestClassIdx];
-
-                    return "Matching...";
+                    int bestIdx = Array.IndexOf(scores, scores.Max());
+                    return _carModelNames[bestIdx];
                 }
             }
-            catch (Exception) { return "Index Fix Req"; }
+            catch { return "ERR"; }
         }
 
         private void Timer_Tick(object? sender, EventArgs e)
@@ -191,20 +184,20 @@ namespace WpfApp1.ViewModels
                         {
                             TrackAndMatch(dets, time);
                             _currentDetections = dets;
-
                             foreach (var d in _currentDetections)
                             {
+                                if (!_colorCache.ContainsKey(d.TrackId))
+                                    _colorCache.TryAdd(d.TrackId, Scalar.FromRgb((byte)_rand.Next(100, 255), (byte)_rand.Next(100, 255), (byte)_rand.Next(100, 255)));
+
                                 if (d.ClassId == 2 && !_modelCache.ContainsKey(d.TrackId))
                                 {
                                     Rect safeBox = new Rect(Math.Max(0, d.Box.X), Math.Max(0, d.Box.Y),
                                                            Math.Min(clone.Width - d.Box.X, d.Box.Width),
                                                            Math.Min(clone.Height - d.Box.Y, d.Box.Height));
-
-                                    if (safeBox.Width > 5 && safeBox.Height > 5)
+                                    if (safeBox.Width > 10 && safeBox.Height > 10)
                                     {
                                         using var crop = new Mat(clone, safeBox).Clone();
-                                        string model = GetSpecificCarModel(crop);
-                                        _modelCache.TryAdd(d.TrackId, model);
+                                        _modelCache.TryAdd(d.TrackId, GetSpecificCarModel(crop));
                                     }
                                 }
                             }
@@ -239,11 +232,24 @@ namespace WpfApp1.ViewModels
             foreach (var d in _currentDetections)
             {
                 if (!_trackedObjects.TryGetValue(d.TrackId, out var track)) continue;
+
+                Scalar objColor = _colorCache.TryGetValue(d.TrackId, out var c) ? c : Scalar.Yellow;
+                Cv2.Rectangle(frame, d.Box, objColor, 2);
+
+                // [복구] 차종 태그, 속도, 모델명 통합 한 줄 표시
                 string typeName = GetTypeName(d.ClassId);
-                string detail = (d.ClassId == 2 && _modelCache.TryGetValue(d.TrackId, out var m)) ? $" / {m}" : "";
-                int spd = (int)(track.RelativeSpeed * 8.5);
-                Cv2.Rectangle(frame, d.Box, Scalar.Yellow, 2);
-                Cv2.PutText(frame, $"{typeName}{detail} | {spd}km/h", new Point(d.Box.X, d.Box.Y - 10), HersheyFonts.HersheySimplex, 0.4, Scalar.Lime, 1);
+                string speedStr = $"{track.Speed:F1}km/h";
+                string modelName = (d.ClassId == 2 && _modelCache.TryGetValue(d.TrackId, out var m)) ? m : "";
+
+                string label = $"[{typeName}] {speedStr} {modelName}".Trim();
+                var labelSize = Cv2.GetTextSize(label, HersheyFonts.HersheySimplex, 0.45, 1, out var baseline);
+
+                // 가독성 배경 박스
+                Rect bgRect = new Rect(d.Box.X, d.Box.Y - labelSize.Height - 10, labelSize.Width + 10, labelSize.Height + baseline + 5);
+                Cv2.Rectangle(frame, bgRect, Scalar.Black, -1);
+
+                Cv2.PutText(frame, label, new Point(d.Box.X + 5, d.Box.Y - 8),
+                           HersheyFonts.HersheySimplex, 0.45, objColor, 1, LineTypes.AntiAlias);
             }
             Cv2.Line(frame, 0, (int)(frame.Height * 0.7), frame.Width, (int)(frame.Height * 0.7), Scalar.Red, 2);
         }
@@ -253,7 +259,7 @@ namespace WpfApp1.ViewModels
             var used = new HashSet<int>();
             foreach (var track in _trackedObjects.Values.ToList())
             {
-                int best = -1; float maxIou = 0.2f;
+                int best = -1; float maxIou = 0.25f;
                 for (int i = 0; i < dets.Count; i++)
                 {
                     if (used.Contains(i)) continue;
@@ -264,11 +270,15 @@ namespace WpfApp1.ViewModels
                 else track.Missed();
             }
             foreach (var d in dets.Where((_, i) => !used.Contains(i))) { var nt = new TrackedObject(d, time); d.TrackId = nt.Id; _trackedObjects[nt.Id] = nt; }
-            _trackedObjects.Where(kv => kv.Value.ShouldBeDeleted).ToList().ForEach(k => { _trackedObjects.Remove(k.Key); _modelCache.TryRemove(k.Key, out _); });
+            _trackedObjects.Where(kv => kv.Value.ShouldBeDeleted).ToList().ForEach(k => {
+                _trackedObjects.Remove(k.Key);
+                _modelCache.TryRemove(k.Key, out _);
+                _colorCache.TryRemove(k.Key, out _);
+            });
         }
 
         private string GetTypeName(int id) => id switch { 2 => "CAR", 5 => "BUS", 7 => "TRUCK", _ => "Vehicle" };
-        private void OpenVideo() { var d = new OpenFileDialog(); if (d.ShowDialog() == true) { _video.Open(d.FileName); _countL = _countF = _countR = 0; _countedIds.Clear(); _trackedObjects.Clear(); _modelCache.Clear(); _timer.Start(); } }
+        private void OpenVideo() { var d = new OpenFileDialog(); if (d.ShowDialog() == true) { _video.Open(d.FileName); _countL = _countF = _countR = 0; _countedIds.Clear(); _trackedObjects.Clear(); _modelCache.Clear(); _colorCache.Clear(); _timer.Start(); } }
         public void Dispose() { _timer.Stop(); _classSession?.Dispose(); _frame.Dispose(); _video.Dispose(); }
     }
 }

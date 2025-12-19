@@ -1,104 +1,77 @@
 ﻿using OpenCvSharp;
+using System;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace WpfApp1.Models
 {
     public class TrackedObject
     {
-        // 객체 삭제 전 최대 미감지 횟수 (예: 5프레임 이상 미감지 시 삭제)
-        private const int MAX_MISSES_BEFORE_DELETION = 5;
-
+        private static int _nextId = 0;
         public int Id { get; }
-        public int ClassId { get; set; }
         public Rect LastBox { get; private set; }
+        public double LastTime { get; private set; }
+        public int MissedFrames { get; private set; }
+        public bool ShouldBeDeleted => MissedFrames > 15; // 넉넉하게 15프레임 대기
 
-        // 객체의 과거 중심점 위치 및 시간 기록 (속도 계산용)
-        private readonly List<(Point center, double timeMsec)> _centerHistory = new();
+        public double Speed { get; private set; }
+        private Point2f _lastCenter;
 
-        public int TrackCount { get; private set; } = 0;
-        public int MissedCount { get; private set; } = 0;
+        // 속도 튐 방지를 위한 버퍼
+        private Queue<double> _speedHistory = new Queue<double>();
 
-        public double RelativeSpeed { get; private set; } = 0;
-
-        private static int _nextId = 1;
-
-        public TrackedObject(Detection detection, double timeMsec)
+        public TrackedObject(Detection det, double time)
         {
-            this.Id = _nextId++;
-            this.ClassId = detection.ClassId;
-            Update(detection, timeMsec);
+            Id = _nextId++;
+            LastBox = det.Box;
+            LastTime = time;
+            _lastCenter = GetCenter(det.Box);
+            MissedFrames = 0;
+            Speed = 0;
         }
 
-        // 객체 감지 시 정보를 갱신합니다.
-        public void Update(Detection detection, double timeMsec)
+        public void Update(Detection det, double time)
         {
-            this.LastBox = detection.Box;
-            this.ClassId = detection.ClassId;
-            detection.TrackId = this.Id;
+            double deltaTime = (time - LastTime) / 1000.0; // 밀리초를 초(s) 단위로 변환
 
-            Point currentCenter = GetCenter(detection.Box);
-            _centerHistory.Add((currentCenter, timeMsec));
-            TrackCount++;
-            MissedCount = 0;
+            if (deltaTime > 0)
+            {
+                Point2f currentCenter = GetCenter(det.Box);
+                double pixelDistance = Distance(_lastCenter, currentCenter);
 
-            // 오래된 히스토리 제거 (예: 2초 이상)
-            double oldestValidTime = timeMsec - 2000;
-            _centerHistory.RemoveAll(h => h.timeMsec < oldestValidTime);
+                // [팩트체크] 고속도로 영상(1920x1080) 기준, 픽셀 거리당 보정 계수 상향
+                // 기존 0.1에서 1.5~2.5 정도로 상향해야 실제 속도(60~100km/h)와 비슷해집니다.
+                double rawSpeed = (pixelDistance / deltaTime) * 0.25;
 
-            CalculateRelativeSpeed();
+                // 갑작스러운 속도 튐 방지 (이동 평균 필터)
+                _speedHistory.Enqueue(rawSpeed);
+                if (_speedHistory.Count > 5) _speedHistory.Dequeue();
+
+                double avgSpeed = 0;
+                foreach (var s in _speedHistory) avgSpeed += s;
+                Speed = avgSpeed / _speedHistory.Count;
+
+                _lastCenter = currentCenter;
+            }
+
+            LastBox = det.Box;
+            LastTime = time;
+            MissedFrames = 0;
         }
 
-        // 객체가 감지되지 않았을 때 호출됩니다.
         public void Missed()
         {
-            MissedCount++;
+            MissedFrames++;
+            Speed *= 0.8; // 놓치면 속도 감속
         }
 
-        // 객체 삭제 필요 여부
-        public bool ShouldBeDeleted => MissedCount > MAX_MISSES_BEFORE_DELETION;
-
-
-        private Point GetCenter(Rect box) => new(box.X + box.Width / 2, box.Y + box.Height / 2);
-
-        // 객체의 상대적인 움직임 속도를 계산합니다.
-        private void CalculateRelativeSpeed()
+        private Point2f GetCenter(Rect rect)
         {
-            if (_centerHistory.Count < 2)
-            {
-                RelativeSpeed = 0;
-                return;
-            }
+            return new Point2f(rect.X + rect.Width / 2.0f, rect.Y + rect.Height / 2.0f);
+        }
 
-            var p2 = _centerHistory.Last();
-
-            // 300ms 이전의 가장 가까운 히스토리 포인트 p1을 찾습니다.
-            double timeThreshold = p2.timeMsec - 300;
-            var p1History = _centerHistory.FirstOrDefault(h => h.timeMsec <= timeThreshold);
-
-            if (p1History.Equals(default))
-            {
-                RelativeSpeed = 0;
-                return;
-            }
-
-            var p1 = p1History;
-
-            double deltaMs = p2.timeMsec - p1.timeMsec;
-
-            if (deltaMs < 100)
-            {
-                RelativeSpeed = 0;
-                return;
-            }
-
-            // 거리 계산
-            double dx = p2.center.X - p1.center.X;
-            double dy = p2.center.Y - p1.center.Y;
-            double distance = System.Math.Sqrt(dx * dx + dy * dy);
-
-            // 속도 = 거리 / 시간. 상수 100을 곱하여 값을 조정 (임의의 스케일)
-            RelativeSpeed = (distance / deltaMs) * 100;
+        private double Distance(Point2f p1, Point2f p2)
+        {
+            return Math.Sqrt(Math.Pow(p1.X - p2.X, 2) + Math.Pow(p1.Y - p2.Y, 2));
         }
     }
 }
