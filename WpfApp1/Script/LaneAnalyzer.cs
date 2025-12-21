@@ -25,22 +25,30 @@ namespace WpfApp1.Scripts
         public float RoiXMarginRatio { get; set; } = 0.04f;
 
         // ===== Wall(빨간) 튜닝 =====
-        public float ProbThreshold { get; set; } = 0.01f;   // laneProb threshold
-        public int BoundaryDilateK { get; set; } = 2;      // "벽 두께" (커널 크기)
-        public int BoundaryDilateIter { get; set; } = 1;    // dilate 반복
+        public float ProbThreshold { get; set; } = 0.45f;   // laneProb threshold
 
-        public int BoundaryDilateKx { get; set; } = 31; // 좌우(가로) 두께
-        public int BoundaryDilateKy { get; set; } = 7;  // 상하(세로) 두께
+        // Dilate 반복
+        public int BoundaryDilateIter { get; set; } = 1;
 
+        // ✅ (중요) 커널 크기: 가로는 얇게, 세로는 길게
+        public int BoundaryDilateKx { get; set; } = 5;
+        public int BoundaryDilateKy { get; set; } = 21;
+
+        // ✅ 새 옵션: 세로 연결 중심 커널 사용(가로 퍼짐 억제)
+        public bool PreferVerticalDilate { get; set; } = true;
+
+        // ✅ 세로 라인 커널의 “가로 반폭”
+        // 0 => 1px(딱 중앙만), 1 => 3px, 2 => 5px
+        public int VerticalKernelHalfWidth { get; set; } = 1;
 
         // ===== Mask 정리(선택) =====
-        public int CloseK { get; set; } = 7;
+        public int CloseK { get; set; } = 5;
         public int OpenK { get; set; } = 3;
 
         // ===== Region 필터 =====
-        public int MinRegionArea { get; set; } = 1000;       // 너무 작은 영역 제거
-        public int MinRegionWidth { get; set; } = 70;       // 폭 너무 얇은 영역 제거(픽셀)
-        public int BottomBandH { get; set; } = 1;          // 하단에서 ego/정렬 기준 잡는 band 높이
+        public int MinRegionArea { get; set; } = 1200;
+        public int MinRegionWidth { get; set; } = 80;
+        public int BottomBandH { get; set; } = 20;
 
         // ===== 디버그 =====
         public bool DrawWallOverlay { get; set; } = true;
@@ -49,8 +57,8 @@ namespace WpfApp1.Scripts
         public bool DrawLabels { get; set; } = true;
 
         // ===== 디버그 알파(화면 안 어둡게) =====
-        public double WallAlpha { get; set; } = 0.22;       // 0.15~0.30 추천
-        public double RegionAlpha { get; set; } = 0.14;     // 0.08~0.18 추천
+        public double WallAlpha { get; set; } = 0.22;
+        public double RegionAlpha { get; set; } = 0.14;
 
         private Mat? _driveMask; // frame size, CV_8UC1 (0/255)
         public void SetDrivableMask(Mat? driveMask8u) => _driveMask = driveMask8u;
@@ -60,13 +68,13 @@ namespace WpfApp1.Scripts
         // =========================
         public sealed class LaneRegion
         {
-            public int Label;                 // connected component label id
+            public int Label;
             public int Area;
             public Rect BBox;                 // ROI 좌표
             public double SortX;              // 좌우 정렬 기준 x (프레임 좌표)
             public Point LabelPointFrame;     // 라벨 텍스트 위치(프레임)
             public Point[]? ContourFrame;     // 경계선(프레임)
-            public Mat? MaskRoi;              // ROI mask (optional, 8UC1)
+            public Mat? MaskRoi;              // ROI mask (8UC1)
         }
 
         public sealed class LaneAnalysisResult
@@ -106,7 +114,7 @@ namespace WpfApp1.Scripts
             // wall morph (선 굵게/연결)
             using var wall2 = MorphWall(wall);
 
-            // wall dilate (벽 두께)
+            // wall dilate (벽 두께/연결)
             using var wallThick = DilateWall(wall2);
 
             // freeRoad = drive AND NOT wallThick
@@ -121,7 +129,6 @@ namespace WpfApp1.Scripts
             }
             else
             {
-                // driveMask 없으면 (디버그용) wall만 제외
                 using var notWall = new Mat();
                 Cv2.BitwiseNot(wallThick, notWall);
                 notWall.CopyTo(freeRoad);
@@ -134,7 +141,6 @@ namespace WpfApp1.Scripts
             int egoX = frameW / 2;
             int egoIdx = FindEgoRegionIndex(regions, roi, egoX);
 
-            // 결과
             var res = new LaneAnalysisResult
             {
                 Roi = roi,
@@ -146,14 +152,14 @@ namespace WpfApp1.Scripts
                     $"lanes:{regions.Count} egoReg:{egoIdx} ego:{EgoLane}/{TotalLanes} | " +
                     $"driveNZ:{(driveRoi == null ? 0 : Cv2.CountNonZero(driveRoi))} " +
                     $"wallNZ:{Cv2.CountNonZero(wallThick)} freeNZ:{Cv2.CountNonZero(freeRoad)} | " +
-                    $"thr:{ProbThreshold:0.00} close:{CloseK} open:{OpenK} dil:{BoundaryDilateK} it:{BoundaryDilateIter} minA:{MinRegionArea}"
+                    $"thr:{ProbThreshold:0.00} close:{CloseK} open:{OpenK} dil:({BoundaryDilateKx},{BoundaryDilateKy}) it:{BoundaryDilateIter} minA:{MinRegionArea}"
             };
 
             return res;
         }
 
         /// <summary>
-        /// ✅ 핵심 수정: 오버레이 합성은 frame 전체가 아니라 "ROI 안에서만" 수행
+        /// ✅ 오버레이 합성은 frame 전체가 아니라 "ROI 안에서만" 수행
         /// </summary>
         public void DrawDebug(Mat frame, LaneAnalysisResult r)
         {
@@ -162,22 +168,17 @@ namespace WpfApp1.Scripts
             // ROI 박스
             Cv2.Rectangle(frame, r.Roi, Scalar.White, 2);
 
-            // ROI 매트 (frame의 sub-mat)
             using var frameRoi = new Mat(frame, r.Roi);
 
-            // =========================
             // 1) Wall overlay (ROI 안에서만)
-            // =========================
             if (DrawWallOverlay && r.WallRoi != null && !r.WallRoi.Empty())
             {
                 using var overlay = frameRoi.Clone();
-                overlay.SetTo(new Scalar(0, 0, 255), r.WallRoi); // 빨강(벽)
+                overlay.SetTo(new Scalar(0, 0, 255), r.WallRoi);
                 Cv2.AddWeighted(overlay, WallAlpha, frameRoi, 1.0 - WallAlpha, 0, frameRoi);
             }
 
-            // =========================
             // 2) Regions overlay (ROI 안에서만)
-            // =========================
             if (DrawRegionsOverlay && r.Regions.Count > 0)
             {
                 Scalar[] palette =
@@ -196,20 +197,16 @@ namespace WpfApp1.Scripts
 
                     var color = palette[i % palette.Length];
 
-                    // ROI 안에서만 색칠
                     using var colored = layer.Clone();
                     colored.SetTo(color, reg.MaskRoi);
 
-                    // ROI 내부만 합성
                     Cv2.AddWeighted(colored, RegionAlpha, layer, 1.0 - RegionAlpha, 0, layer);
                 }
 
                 layer.CopyTo(frameRoi);
             }
 
-            // =========================
             // 3) Contours (frame 좌표)
-            // =========================
             if (DrawContours)
             {
                 foreach (var reg in r.Regions)
@@ -219,14 +216,10 @@ namespace WpfApp1.Scripts
                 }
             }
 
-            // =========================
-            // 4) Labels: #laneNumber (UI 기반)
-            // =========================
+            // 4) Labels: #laneNumber
             DrawLaneNumberLabels(frame, r);
 
-            // =========================
             // 5) Debug line
-            // =========================
             Cv2.PutText(frame, r.DebugLine,
                 new Point(r.Roi.Left + 10, r.Roi.Top + 25),
                 HersheyFonts.HersheySimplex, 0.6, Scalar.White, 2);
@@ -272,6 +265,30 @@ namespace WpfApp1.Scripts
             return outMask;
         }
 
+        private Mat BuildVerticalLineKernel(int kx, int ky, int halfWidth)
+        {
+            // ky x kx 커널 생성: 중앙 열 기준으로 세로줄을 1로 채움
+            // halfWidth=0 => 1px, 1 => 3px, 2 => 5px
+            kx = Math.Max(1, kx);
+            ky = Math.Max(1, ky);
+            if (kx % 2 == 0) kx++;
+            if (ky % 2 == 0) ky++;
+
+            int cx = kx / 2;
+            int hw = Math.Clamp(halfWidth, 0, (kx - 1) / 2);
+
+            var kernel = new Mat(ky, kx, MatType.CV_8UC1, Scalar.All(0));
+            for (int y = 0; y < ky; y++)
+            {
+                for (int dx = -hw; dx <= hw; dx++)
+                {
+                    int x = cx + dx;
+                    if (x >= 0 && x < kx) kernel.Set(y, x, (byte)1);
+                }
+            }
+            return kernel;
+        }
+
         private Mat DilateWall(Mat wall)
         {
             int kx = Math.Max(1, BoundaryDilateKx);
@@ -279,12 +296,14 @@ namespace WpfApp1.Scripts
             if (kx % 2 == 0) kx++;
             if (ky % 2 == 0) ky++;
 
-            using var kernel = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(kx, ky));
+            using Mat kernel = PreferVerticalDilate
+                ? BuildVerticalLineKernel(kx, ky, VerticalKernelHalfWidth)   // ✅ 세로 연결 커널
+                : Cv2.GetStructuringElement(MorphShapes.Rect, new Size(kx, ky)); // 일반 Rect
+
             var dst = new Mat();
             Cv2.Dilate(wall, dst, kernel, iterations: Math.Max(1, BoundaryDilateIter));
             return dst;
         }
-
 
         private List<LaneRegion> SplitRegions(Mat freeRoadRoi, Rect roiInFrame)
         {

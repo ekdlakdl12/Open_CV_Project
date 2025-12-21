@@ -10,9 +10,12 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using System.Linq;
 using System.IO;
-using MongoDB.Driver;
 using WpfApp1.Scripts;
 using System.Collections.ObjectModel;
+using System.Windows;
+
+using CvPoint = OpenCvSharp.Point;
+using CvRect = OpenCvSharp.Rect;
 
 namespace WpfApp1.ViewModels
 {
@@ -28,7 +31,7 @@ namespace WpfApp1.ViewModels
         private YolopDetectService? _yolop;
 
         private Mat? _driveMask;   // CV_8UC1 0/255 (원본 크기)
-        private Mat? _laneMask;    // CV_8UC1 0/255 (원본 크기)
+        private Mat? _laneMask;    // CV_8UC1 0/255 (원본 크기) - 현재 표시용만
         private Mat? _laneProb;    // CV_32FC1 0~1 (원본 크기)
 
         private readonly Mat _frame = new();
@@ -40,7 +43,8 @@ namespace WpfApp1.ViewModels
         private volatile bool _isLaneBusy = false;  // 차선/도로 Task
         private readonly DispatcherTimer _timer = new();
 
-        private readonly IMongoCollection<VehicleRecord>? _collection;
+        // ===== 프레임 타이밍 =====
+        private TimeSpan _frameInterval = TimeSpan.FromMilliseconds(33); // 기본 30fps
 
         // =========================
         // UI 바인딩 속성
@@ -86,7 +90,6 @@ namespace WpfApp1.ViewModels
                 _totalLanes = v;
                 OnPropertyChanged();
 
-                // ✅ TotalLanes 바뀌면 CurrentLane 자동 보정
                 if (CurrentLane > _totalLanes) CurrentLane = _totalLanes;
                 if (CurrentLane < 1) CurrentLane = 1;
 
@@ -120,31 +123,58 @@ namespace WpfApp1.ViewModels
         {
             OpenVideoCommand = new RelayCommand(OpenVideo);
             StopCommand = new RelayCommand(Stop);
+
             _timer.Tick += Timer_Tick;
-            _timer.Interval = TimeSpan.FromMilliseconds(1);
+            _timer.Interval = _frameInterval; // fps 기반으로 갱신됨
 
-            try
-            {
-                var client = new MongoClient("mongodb://localhost:27017");
-                var database = client.GetDatabase("TrafficDB");
-                _collection = database.GetCollection<VehicleRecord>("VehicleHistory");
-            }
-            catch { }
-
-            // ✅ (선택) Analyzer 기본 튜닝값 (너가 지금 쓰던 값들 유지/조정해서 쓰면 됨)
+            // ✅ Analyzer 기본 튜닝값
             _laneAnalyzer.RoiYStartRatio = 0.55f;
             _laneAnalyzer.RoiXMarginRatio = 0.04f;
-            _laneAnalyzer.ProbThreshold = 0.55f;
+
+            // ✅ “벽이 너무 많아서 lanes=0”이면 thr를 올려야 함
+            _laneAnalyzer.ProbThreshold = 0.45f;
+
+            // ✅ 핵심: 벽 딜레이트를 “세로 연결 중심”으로 (LaneAnalyzer.cs에서 구현)
+            _laneAnalyzer.PreferVerticalDilate = true;
+            _laneAnalyzer.BoundaryDilateKx = 5;   // 가로는 얇게
+            _laneAnalyzer.BoundaryDilateKy = 21;  // 세로는 길게
+            _laneAnalyzer.VerticalKernelHalfWidth = 0; // 0이면 1px 세로줄, 1이면 3px(추천)
+
+            // 너무 두꺼운 연결 방지
+            _laneAnalyzer.CloseK = 5;
+            _laneAnalyzer.OpenK = 3;
+
+            _laneAnalyzer.MinRegionArea = 1200;
+            _laneAnalyzer.MinRegionWidth = 80;
+            _laneAnalyzer.BottomBandH = 20; // 1은 너무 얇아 sortX가 흔들릴 수 있음
 
             InitializeDetector();
             InitializeYolop();
         }
+
+        // =========================
+        // UI 안전 업데이트 헬퍼
+        // =========================
+        private void Ui(Action a)
+        {
+            try
+            {
+                var disp = Application.Current?.Dispatcher;
+                if (disp == null || disp.CheckAccess()) a();
+                else disp.Invoke(a);
+            }
+            catch { }
+        }
+
+        private void SafeSetStatus(string msg) => Ui(() => StatusText = msg);
 
         private void InitializeDetector()
         {
             string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, BaseOnnxPath);
             if (File.Exists(fullPath))
                 _detector = new YoloDetectService(fullPath, 640, 0.25f, 0.45f);
+            else
+                SafeSetStatus($"YOLOv8 ONNX 없음: {fullPath}");
         }
 
         private void InitializeYolop()
@@ -152,11 +182,88 @@ namespace WpfApp1.ViewModels
             string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, YolopOnnxPath);
             if (File.Exists(fullPath))
                 _yolop = new YolopDetectService(fullPath, 640, 0.35f, 0.45f);
+            else
+                SafeSetStatus($"YOLOP ONNX 없음: {fullPath}");
+        }
+
+        private void ApplyTimerIntervalFromVideo()
+        {
+            double fps = _video.Fps;
+            if (fps < 1 || fps > 240) fps = 30;
+
+            _frameInterval = TimeSpan.FromMilliseconds(1000.0 / fps);
+            if (_frameInterval < TimeSpan.FromMilliseconds(10))
+                _frameInterval = TimeSpan.FromMilliseconds(10); // UI 과부하 방지
+
+            _timer.Interval = _frameInterval;
+        }
+
+        // =========================
+        // ✅ laneProb 뒤집힘 자동 보정 (벽 비율 기반)
+        // =========================
+        private CvRect BuildLaneRoi(int frameW, int frameH)
+        {
+            int y0 = (int)(frameH * _laneAnalyzer.RoiYStartRatio);
+            int xMargin = (int)(frameW * _laneAnalyzer.RoiXMarginRatio);
+
+            y0 = Math.Clamp(y0, 0, frameH - 1);
+            xMargin = Math.Clamp(xMargin, 0, frameW / 3);
+
+            int x0 = xMargin;
+            int w = Math.Max(1, frameW - xMargin * 2);
+            int h = Math.Max(1, frameH - y0);
+
+            return new CvRect(x0, y0, w, h);
+        }
+
+        private static double RatioOverThr(Mat prob32f, CvRect roi, float thr)
+        {
+            int step = 8;
+            long over = 0, cnt = 0;
+
+            int y0 = Math.Max(0, roi.Y);
+            int y1 = Math.Min(prob32f.Rows, roi.Bottom);
+            int x0 = Math.Max(0, roi.X);
+            int x1 = Math.Min(prob32f.Cols, roi.Right);
+
+            for (int y = y0; y < y1; y += step)
+            {
+                for (int x = x0; x < x1; x += step)
+                {
+                    float v = prob32f.At<float>(y, x);
+                    if (float.IsNaN(v)) continue;
+                    if (v >= thr) over++;
+                    cnt++;
+                }
+            }
+
+            return cnt > 0 ? (double)over / cnt : 0.0;
+        }
+
+        private static Mat AutoFixLaneProbByWallRatio(Mat prob32f, CvRect roi, float thr)
+        {
+            // 원본 prob에서 벽 비율
+            double r0 = RatioOverThr(prob32f, roi, thr);
+
+            // 1-prob에서 벽 비율
+            using var invTmp = new Mat(prob32f.Rows, prob32f.Cols, MatType.CV_32FC1);
+            Cv2.Subtract(Scalar.All(1.0), prob32f, invTmp);
+            double r1 = RatioOverThr(invTmp, roi, thr);
+
+            // ✅ 더 “희소한 벽”이 정상일 가능성이 큼
+            if (r1 < r0)
+                return invTmp.Clone();
+
+            return prob32f;
         }
 
         private void Timer_Tick(object? sender, EventArgs e)
         {
-            if (!_video.Read(_frame)) { Stop(); return; }
+            if (!_video.Read(_frame) || _frame.Empty())
+            {
+                Stop();
+                return;
+            }
 
             // =========================
             // 1) YOLOP (차선/도로)
@@ -186,16 +293,32 @@ namespace WpfApp1.ViewModels
                             _laneAnalyzer.TotalLanes = this.TotalLanes;
                             _laneAnalyzer.EgoLane = this.CurrentLane;
 
-                            // (선택) 주행가능영역 gate 쓸 때만
+                            // drive mask gate
                             _laneAnalyzer.SetDrivableMask(_driveMask);
 
                             if (_laneProb != null && !_laneProb.Empty())
+                            {
+                                // ✅ prob 뒤집힘 자동 보정(벽 비율 비교)
+                                var roi = BuildLaneRoi(_frame.Width, _frame.Height);
+                                var fixedProb = AutoFixLaneProbByWallRatio(_laneProb, roi, _laneAnalyzer.ProbThreshold);
+                                if (!ReferenceEquals(fixedProb, _laneProb))
+                                {
+                                    _laneProb.Dispose();
+                                    _laneProb = fixedProb;
+                                }
+
                                 _laneAnalysis = _laneAnalyzer.AnalyzeFromProb(_laneProb, _frame.Width, _frame.Height);
+                            }
                             else
+                            {
                                 _laneAnalysis = null;
+                            }
                         }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        SafeSetStatus($"YOLOP 오류: {ex.Message}");
+                    }
                     finally
                     {
                         laneFrame.Dispose();
@@ -223,12 +346,18 @@ namespace WpfApp1.ViewModels
                         {
                             TrackAndMatch(dets, time);
                             _currentDetections = dets;
+                        }
 
+                        Ui(() =>
+                        {
                             DetectionsCount = dets.Count;
                             TrackedCountText = $"Tracked: {_trackedObjects.Count}";
-                        }
+                        });
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        SafeSetStatus($"YOLOv8 오류: {ex.Message}");
+                    }
                     finally
                     {
                         vehicleFrame.Dispose();
@@ -246,7 +375,8 @@ namespace WpfApp1.ViewModels
                 DrawOutput(_frame);
             }
 
-            FrameImage = _frame.ToBitmapSource();
+            var bmp = _frame.ToBitmapSource();
+            Ui(() => FrameImage = bmp);
         }
 
         private void TrackAndMatch(List<Detection> detections, double timeMsec)
@@ -295,7 +425,7 @@ namespace WpfApp1.ViewModels
             {
                 if (_countedIds.Contains(track.Id)) continue;
 
-                var center = new Point(track.LastBox.X + track.LastBox.Width / 2, track.LastBox.Y + track.LastBox.Height / 2);
+                var center = new CvPoint(track.LastBox.X + track.LastBox.Width / 2, track.LastBox.Y + track.LastBox.Height / 2);
 
                 if (center.Y > lineY)
                 {
@@ -306,17 +436,10 @@ namespace WpfApp1.ViewModels
                     else _countR++;
 
                     _countedIds.Add(track.Id);
-
-                    int calculatedSpeed = (int)(track.RelativeSpeed * 8.5);
-
-                    if (calculatedSpeed > 130) calculatedSpeed = new Random().Next(105, 115);
-                    else if (calculatedSpeed < 10 && track.RelativeSpeed > 0) calculatedSpeed = new Random().Next(80, 95);
-
-                    _ = SaveToMongoAsync(GetTypeName(track.ClassId), dir, calculatedSpeed);
                 }
             }
 
-            CountText = $"L:{_countL} | F:{_countF} | R:{_countR}";
+            Ui(() => CountText = $"L:{_countL} | F:{_countF} | R:{_countR}");
         }
 
         private string GetTypeName(int id) => id switch
@@ -328,22 +451,6 @@ namespace WpfApp1.ViewModels
             _ => "Vehicle"
         };
 
-        private async Task SaveToMongoAsync(string type, string dir, int speed)
-        {
-            if (_collection == null) return;
-            try
-            {
-                await _collection.InsertOneAsync(new VehicleRecord
-                {
-                    DetectTime = DateTime.Now,
-                    VehicleType = type,
-                    Direction = dir,
-                    Speed = speed
-                });
-            }
-            catch { }
-        }
-
         private void DrawOutput(Mat frame)
         {
             // 1) 도로(초록) 오버레이
@@ -354,25 +461,28 @@ namespace WpfApp1.ViewModels
                 Cv2.AddWeighted(overlay, 0.20, frame, 0.80, 0, frame);
             }
 
-            // 2) 빨간 마스크(보기용)
+            // 2) 빨간 마스크(표시용) - 분석용 thr와 분리
             if (_laneProb != null && !_laneProb.Empty())
             {
                 using var prob8u = new Mat();
                 _laneProb.ConvertTo(prob8u, MatType.CV_8UC1, 255.0);
 
+                // ✅ 표시용은 더 빡세게(덜 빨개짐)
+                float displayThr = Math.Min(0.85f, _laneAnalyzer.ProbThreshold + 0.30f);
+
                 using var m = new Mat();
-                Cv2.Threshold(prob8u, m, 255 * 0.50, 255, ThresholdTypes.Binary);
+                Cv2.Threshold(prob8u, m, 255 * displayThr, 255, ThresholdTypes.Binary);
 
                 using var laneOverlay = frame.Clone();
                 laneOverlay.SetTo(new Scalar(0, 0, 255), m);
-                Cv2.AddWeighted(laneOverlay, 0.15, frame, 0.85, 0, frame);
+                Cv2.AddWeighted(laneOverlay, 0.10, frame, 0.90, 0, frame);
             }
 
-            // 3) ✅ Analyzer Debug (곡선 + 차선번호 라벨)
+            // 3) Analyzer Debug (곡선 + 차선번호 라벨)
             if (_laneAnalysis != null)
                 _laneAnalyzer.DrawDebug(frame, _laneAnalysis);
 
-            // 4) 차량 박스
+            // 4) 차량 박스 (차선 라벨링은 다음 단계에서: lane region 안에 center가 들어가는지로 매핑)
             foreach (var d in _currentDetections)
             {
                 if (!_trackedObjects.TryGetValue(d.TrackId, out var track)) continue;
@@ -383,16 +493,16 @@ namespace WpfApp1.ViewModels
                 Cv2.Rectangle(frame, d.Box, Scalar.Yellow, 2);
                 Cv2.PutText(frame,
                     $"{GetTypeName(d.ClassId)} {displaySpeed}km/h",
-                    new Point(d.Box.X, d.Box.Y - 5),
+                    new CvPoint(d.Box.X, d.Box.Y - 5),
                     HersheyFonts.HersheySimplex,
                     0.5,
                     Scalar.Lime,
                     1);
             }
 
-            // (선택) UI 값 표시
+            // UI 값 표시
             Cv2.PutText(frame, $"UI Lane: {CurrentLane}/{TotalLanes}",
-                new Point(20, 40), HersheyFonts.HersheySimplex, 0.8, Scalar.White, 2);
+                new CvPoint(20, 40), HersheyFonts.HersheySimplex, 0.8, Scalar.White, 2);
         }
 
         private void OpenVideo()
@@ -400,25 +510,40 @@ namespace WpfApp1.ViewModels
             var dialog = new OpenFileDialog();
             if (dialog.ShowDialog() == true)
             {
-                VideoPath = dialog.FileName;
-                StatusText = "Playing...";
+                try
+                {
+                    VideoPath = dialog.FileName;
+                    SafeSetStatus("Opening...");
 
-                _video.Open(dialog.FileName);
+                    _video.Open(dialog.FileName);
+                    ApplyTimerIntervalFromVideo();
 
-                _countL = 0; _countF = 0; _countR = 0;
-                _countedIds.Clear();
-                _trackedObjects.Clear();
+                    Ui(() => StatusText = "Playing...");
 
-                DetectionsCount = 0;
-                TrackedCountText = "Tracked: 0";
+                    _countL = 0; _countF = 0; _countR = 0;
+                    _countedIds.Clear();
+                    _trackedObjects.Clear();
 
-                _driveMask?.Dispose(); _driveMask = null;
-                _laneMask?.Dispose(); _laneMask = null;
-                _laneProb?.Dispose(); _laneProb = null;
+                    Ui(() =>
+                    {
+                        DetectionsCount = 0;
+                        TrackedCountText = "Tracked: 0";
+                        CountText = "L:0 | F:0 | R:0";
+                    });
 
-                _laneAnalysis = null;
+                    _driveMask?.Dispose(); _driveMask = null;
+                    _laneMask?.Dispose(); _laneMask = null;
+                    _laneProb?.Dispose(); _laneProb = null;
 
-                _timer.Start();
+                    _laneAnalysis = null;
+
+                    _timer.Start();
+                }
+                catch (Exception ex)
+                {
+                    SafeSetStatus($"영상 열기 실패: {ex.Message}");
+                    Stop();
+                }
             }
         }
 
@@ -426,7 +551,7 @@ namespace WpfApp1.ViewModels
         {
             _timer.Stop();
             _video.Close();
-            StatusText = "Stopped";
+            SafeSetStatus("Stopped");
         }
 
         public void Dispose()
