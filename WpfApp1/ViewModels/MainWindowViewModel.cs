@@ -111,7 +111,7 @@ namespace WpfApp1.ViewModels
         public string CurrentLaneLabel => $"Lane {CurrentLane}/{TotalLanes}";
 
         // =========================
-        // ✅ LaneAnalyzer (최신버전 프로퍼티 맞춤)
+        // ✅ LaneAnalyzer
         // =========================
         private readonly LaneAnalyzer _laneAnalyzer = new LaneAnalyzer();
         private LaneAnalyzer.LaneAnalysisResult? _laneAnalysis;
@@ -131,43 +131,10 @@ namespace WpfApp1.ViewModels
             }
             catch { }
 
-            // =========================
-            // ✅ LaneAnalyzer 파라미터 (너가 올린 최신 LaneAnalyzer 기준)
-            // =========================
-            _laneAnalyzer.ProbThreshold = 0.55f;
-
-            // ROI: 근거리만 사용
+            // ✅ (선택) Analyzer 기본 튜닝값 (너가 지금 쓰던 값들 유지/조정해서 쓰면 됨)
             _laneAnalyzer.RoiYStartRatio = 0.55f;
             _laneAnalyzer.RoiXMarginRatio = 0.04f;
-
-            // wall 정리
-            _laneAnalyzer.CloseK = 9;
-            _laneAnalyzer.OpenK = 3;
-
-            // wall 두께
-            _laneAnalyzer.BoundaryDilateK = 40;
-            _laneAnalyzer.BoundaryDilateIter = 1;
-
-            // ✅ 핵심: near-field column boost
-            _laneAnalyzer.EnableColumnBoost = true;
-            _laneAnalyzer.BoostBandRatio = 0.35f;
-            _laneAnalyzer.BoostColumnMinCount = 1;
-            _laneAnalyzer.BoostExpandX = 14;
-            _laneAnalyzer.BoostExtendToTop = true;
-
-            // region 필터
-            _laneAnalyzer.MinRegionArea = 900;
-            _laneAnalyzer.MinRegionWidth = 35;
-
-            // ego/정렬 기준 band
-            _laneAnalyzer.BottomBandH = 18;
-
-            // debug draw
-            _laneAnalyzer.DrawWallOverlay = false;
-            _laneAnalyzer.DrawRegionsOverlay = true;
-            _laneAnalyzer.DrawContours = true;
-            _laneAnalyzer.DrawLaneLabels = true;
-            _laneAnalyzer.DrawBoostBandBox = true;
+            _laneAnalyzer.ProbThreshold = 0.55f;
 
             InitializeDetector();
             InitializeYolop();
@@ -219,20 +186,16 @@ namespace WpfApp1.ViewModels
                             _laneAnalyzer.TotalLanes = this.TotalLanes;
                             _laneAnalyzer.EgoLane = this.CurrentLane;
 
-                            // ✅ gate용 driveMask 전달
+                            // (선택) 주행가능영역 gate 쓸 때만
                             _laneAnalyzer.SetDrivableMask(_driveMask);
 
-                            // ✅ null/empty 체크 (CS8604 방지)
                             if (_laneProb != null && !_laneProb.Empty())
                                 _laneAnalysis = _laneAnalyzer.AnalyzeFromProb(_laneProb, _frame.Width, _frame.Height);
                             else
                                 _laneAnalysis = null;
                         }
                     }
-                    catch
-                    {
-                        // 필요하면 StatusText 찍어도 됨
-                    }
+                    catch { }
                     finally
                     {
                         laneFrame.Dispose();
@@ -332,8 +295,7 @@ namespace WpfApp1.ViewModels
             {
                 if (_countedIds.Contains(track.Id)) continue;
 
-                var center = new Point(track.LastBox.X + track.LastBox.Width / 2,
-                                       track.LastBox.Y + track.LastBox.Height / 2);
+                var center = new Point(track.LastBox.X + track.LastBox.Width / 2, track.LastBox.Y + track.LastBox.Height / 2);
 
                 if (center.Y > lineY)
                 {
@@ -406,7 +368,7 @@ namespace WpfApp1.ViewModels
                 Cv2.AddWeighted(laneOverlay, 0.15, frame, 0.85, 0, frame);
             }
 
-            // 3) ✅ Analyzer Debug (regions + labels)
+            // 3) ✅ Analyzer Debug (곡선 + 차선번호 라벨)
             if (_laneAnalysis != null)
                 _laneAnalyzer.DrawDebug(frame, _laneAnalysis);
 
@@ -428,7 +390,7 @@ namespace WpfApp1.ViewModels
                     1);
             }
 
-            // UI 값 표시
+            // (선택) UI 값 표시
             Cv2.PutText(frame, $"UI Lane: {CurrentLane}/{TotalLanes}",
                 new Point(20, 40), HersheyFonts.HersheySimplex, 0.8, Scalar.White, 2);
         }
