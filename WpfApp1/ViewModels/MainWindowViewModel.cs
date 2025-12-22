@@ -15,29 +15,29 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
 using CvPoint = OpenCvSharp.Point;
-using CvRect = OpenCvSharp.Rect;
 
 namespace WpfApp1.ViewModels
 {
     public class MainWindowViewModel : ViewModelBase, IDisposable
     {
         private const string BaseOnnxPath = "Scripts/yolov8n.onnx";
+        private const string YolopOnnxPath = "Scripts/yolop-640-640.onnx";
+
         private readonly VideoPlayerService _video = new();
         private YoloDetectService? _detector;
-
-        private const string YolopOnnxPath = "Scripts/yolop-640-640.onnx";
         private YolopDetectService? _yolop;
 
-        private Mat? _driveMask;   // CV_8UC1 0/255
-        private Mat? _laneProb;    // CV_32FC1 0~1
+        private Mat? _driveMask;   // CV_8UC1 0/255 (orig size)
+        private Mat? _laneProb;    // CV_32FC1 0~1 (orig size)
 
         private readonly Mat _frame = new();
         private readonly Dictionary<int, TrackedObject> _trackedObjects = new();
         private readonly object _lock = new();
+
         private List<Detection> _currentDetections = new();
 
-        private volatile bool _isBusy = false;
-        private volatile bool _isLaneBusy = false;
+        private volatile bool _isBusy = false;       // yolo v8
+        private volatile bool _isLaneBusy = false;   // yolop
         private readonly DispatcherTimer _timer = new();
 
         private TimeSpan _frameInterval = TimeSpan.FromMilliseconds(33);
@@ -45,6 +45,7 @@ namespace WpfApp1.ViewModels
         private readonly int _laneInferIntervalMs = 200;
         private long _lastLaneInferMs = 0;
 
+        // ✅ LaneAnalyzer result (backup point)
         private LaneAnalyzer.LaneAnalysisResult? _laneAnalysisStable;
 
         private class LaneStableState
@@ -124,7 +125,7 @@ namespace WpfApp1.ViewModels
         public string CurrentLaneLabel => $"Lane {CurrentLane}/{TotalLanes}";
 
         // =========================
-        // LaneAnalyzer (NEW)
+        // LaneAnalyzer (backup point)
         // =========================
         private readonly LaneAnalyzer _laneAnalyzer = new LaneAnalyzer();
 
@@ -136,7 +137,7 @@ namespace WpfApp1.ViewModels
             _timer.Tick += Timer_Tick;
             _timer.Interval = _frameInterval;
 
-            // ===== 튜닝: “차로 등분 + laneLine 보정” =====
+            // ✅ LaneAnalyzer 튜닝(네가 주신 LaneAnalyzer.cs 파라미터와 동일 필드명)
             _laneAnalyzer.RoiYStartRatio = 0.52f;
             _laneAnalyzer.RoiXMarginRatio = 0.02f;
 
@@ -148,6 +149,16 @@ namespace WpfApp1.ViewModels
             _laneAnalyzer.LaneMaskCloseK = 5;
 
             _laneAnalyzer.CorridorBottomBandH = 60;
+
+            // Follow 관련(백업 LaneAnalyzer 내부 사용)
+            _laneAnalyzer.SampleBandCount = 18;
+            _laneAnalyzer.SampleYTopRatio = 0.30f;
+            _laneAnalyzer.SampleYBottomRatio = 0.95f;
+            _laneAnalyzer.PeakMinStrength = 6;
+            _laneAnalyzer.PeakMinGapPx = 18;
+            _laneAnalyzer.ExpectedWindowPx = 90;
+            _laneAnalyzer.FollowWindowPx = 75;
+            _laneAnalyzer.PreferLaneProbForEgoBoundaries = true;
 
             InitializeDetector();
             InitializeYolop();
@@ -163,6 +174,7 @@ namespace WpfApp1.ViewModels
             }
             catch { }
         }
+
         private void SafeSetStatus(string msg) => Ui(() => StatusText = msg);
 
         private void InitializeDetector()
@@ -233,14 +245,9 @@ namespace WpfApp1.ViewModels
                             _laneAnalyzer.SetDrivableMask(_driveMask);
 
                             if (_laneProb != null && !_laneProb.Empty())
-                            {
-                                // ✅ 항상 “경계선 기반 결과”를 만들기 때문에 stable이 덜 흔들림
                                 _laneAnalysisStable = _laneAnalyzer.Analyze(_laneProb, laneFrame.Width, laneFrame.Height);
-                            }
                             else
-                            {
                                 _laneAnalysisStable = null;
-                            }
                         }
                     }
                     catch (Exception ex)
@@ -438,7 +445,7 @@ namespace WpfApp1.ViewModels
                 Cv2.AddWeighted(overlay, 0.20, frame, 0.80, 0, frame);
             }
 
-            // 2) LaneProb overlay (표시용만, 얇게)
+            // 2) LaneProb overlay (표시용 빨간색, 얇게)
             if (_laneProb != null && !_laneProb.Empty())
             {
                 using var prob8u = new Mat();
@@ -454,7 +461,7 @@ namespace WpfApp1.ViewModels
                 Cv2.AddWeighted(laneOverlay, 0.10, frame, 0.90, 0, frame);
             }
 
-            // 3) Analyzer boundary/labels
+            // 3) LaneAnalyzer boundary/labels
             if (_laneAnalysisStable != null)
                 _laneAnalyzer.DrawOnFrame(frame, _laneAnalysisStable);
 

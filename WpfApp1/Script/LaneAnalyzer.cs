@@ -1,7 +1,11 @@
-﻿// LaneAnalyzer.cs (FULL REPLACEMENT - EgoLane boundary follows red laneProb peaks)
-// - EgoLane 좌/우 경계(2개)는 "빨간선(peak)"을 아래->위로 추적하며 따라감
-// - 나머지 경계는 corridor 등분 + peak 보정(fallback)
-// - DrawOnFrame / TryGetLaneNumberForPoint API는 그대로 유지
+﻿// LaneAnalyzer.cs (FULL REPLACEMENT - API COMPATIBLE)
+// - 기존 MainWindowViewModel.cs가 기대하는 API 유지:
+//   * LaneAnalysisResult, Analyze(), DrawOnFrame(), TryGetLaneNumberForPoint(), SetDrivableMask()
+//   * TotalLanes/EgoLane, RoiYStartRatio/RoiXMarginRatio 등 튜닝 프로퍼티 유지
+// - 추가 기능:
+//   * laneProb peak(빨간점)들을 세로로 연결해 "실제 검출된 라인만" 흰색 polyline으로 그리기
+//   * 빨간 점이 부족하면 라인 자체를 안 그림(=요구사항)
+//   * 기존 강제 boundary(1~TotalLanes+1) 흰선/라벨은 옵션으로 끌 수 있음
 
 using OpenCvSharp;
 using System;
@@ -33,28 +37,31 @@ namespace WpfApp1.Scripts
         public int CorridorBottomBandH { get; set; } = 60;
 
         // =========================
-        // NEW: "빨간선 따라가기" 파라미터
+        // "빨간선(peak)" 파라미터
         // =========================
         public int SampleBandCount { get; set; } = 18;
-
-        // ROI 내부에서 샘플링 범위 (너무 위는 laneProb가 약해 흔들림)
         public float SampleYTopRatio { get; set; } = 0.30f;
         public float SampleYBottomRatio { get; set; } = 0.95f;
 
-        // 한 row에서 peak 덩어리 최소 길이(약한 빨간선 무시)
         public int PeakMinStrength { get; set; } = 6;
-
-        // peak 병합 최소 간격
         public int PeakMinGapPx { get; set; } = 18;
 
-        // expected 근처 탐색 폭 (나머지 경계용)
         public int ExpectedWindowPx { get; set; } = 90;
-
-        // ✅ 핵심: EgoLane 경계 peak를 아래->위로 추적할 때 허용 이동 폭
         public int FollowWindowPx { get; set; } = 75;
 
-        // ✅ EgoLane 경계는 가능한 한 peak를 강제 사용
         public bool PreferLaneProbForEgoBoundaries { get; set; } = true;
+
+        // =========================
+        // ✅ NEW: 화면에 "peak들을 이어 만든 흰색 라인"을 그리는 옵션
+        // =========================
+        public bool DebugDrawPeakPolylines { get; set; } = true;   // ✅ 기본 ON
+        public bool DebugDrawBoundaries { get; set; } = false;     // 기존 강제 1~N 경계선은 기본 OFF
+        public bool DebugDrawLabels { get; set; } = false;         // #1 #2 라벨도 기본 OFF
+        public bool DebugDrawLanePeaksDots { get; set; } = false;  // 빨간 점(●)은 필요하면 ON
+
+        // peak polyline clustering
+        public int PeakPolylineFollowX { get; set; } = 38;         // 이전 점과 x 차 허용
+        public int PeakPolylineMinLen { get; set; } = 7;           // 이 개수 이상 이어진 것만 라인으로 그림
 
         // =========================
         // Drivable mask(원본크기, CV_8UC1 0/255)
@@ -140,22 +147,15 @@ namespace WpfApp1.Scripts
             int egoLeftB = Math.Clamp(EgoLane - 1, 0, TotalLanes); // boundary index
             int egoRightB = Math.Clamp(EgoLane, 0, TotalLanes);
 
-            // 4-1) ✅ EgoLane 경계 2개는 "peak 추적"으로 x(y) 시퀀스를 먼저 만든다
             Dictionary<int, double>? egoLeftXByY = null;
             Dictionary<int, double>? egoRightXByY = null;
 
             if (PreferLaneProbForEgoBoundaries)
             {
-                egoLeftXByY = FollowBoundaryByPeaks(
-                    laneMask, driveRoi8u, sampleYs,
-                    boundaryIndex: egoLeftB);
-
-                egoRightXByY = FollowBoundaryByPeaks(
-                    laneMask, driveRoi8u, sampleYs,
-                    boundaryIndex: egoRightB);
+                egoLeftXByY = FollowBoundaryByPeaks(laneMask, driveRoi8u, sampleYs, egoLeftB);
+                egoRightXByY = FollowBoundaryByPeaks(laneMask, driveRoi8u, sampleYs, egoRightB);
             }
 
-            // 4-2) boundary points 채우기
             foreach (var y in sampleYs)
             {
                 int leftX = 0;
@@ -188,7 +188,6 @@ namespace WpfApp1.Scripts
                     else if (b == TotalLanes) bx = rightX;
                     else if (PreferLaneProbForEgoBoundaries && (b == egoLeftB || b == egoRightB))
                     {
-                        // ✅ EgoLane 경계는 추적값 우선
                         var dict = (b == egoLeftB) ? egoLeftXByY : egoRightXByY;
                         if (dict != null && dict.TryGetValue(y, out var v))
                             bx = v;
@@ -197,7 +196,6 @@ namespace WpfApp1.Scripts
                     }
                     else
                     {
-                        // 나머지는 expected 근처 peak 있으면 사용, 없으면 expected
                         bx = SelectPeakNearExpected(peaks, expected[b], ExpectedWindowPx, fallback: expected[b]);
                     }
 
@@ -210,19 +208,14 @@ namespace WpfApp1.Scripts
             for (int b = 0; b < TotalLanes + 1; b++)
             {
                 var pts = boundaryPoints[b];
-
-                // outlier 완화
                 var filtered = FilterOutliersByMedianX(pts, 70);
 
                 var (a, bb) = FitLineXofY(filtered.Count >= 6 ? filtered : pts);
 
-                // 기울기 제한(뒤집힘 방지)
                 a = Math.Clamp(a, -2.0, 2.0);
-
                 lines.Add((a, bb));
             }
 
-            // 6) 결과
             var result = new LaneAnalysisResult
             {
                 Width = frameW,
@@ -240,7 +233,7 @@ namespace WpfApp1.Scripts
         }
 
         // =========================
-        // ✅ Ego boundary "Follow" (bottom -> top)
+        // Ego boundary "Follow" (bottom -> top)
         // =========================
         private Dictionary<int, double> FollowBoundaryByPeaks(
             Mat laneMask8u,
@@ -248,14 +241,11 @@ namespace WpfApp1.Scripts
             int[] sampleYsAscending,
             int boundaryIndex)
         {
-            // boundaryIndex: 0..TotalLanes
-            // 우리는 sampleYs를 "가까운 아래쪽부터 위쪽으로" 추적해야 하므로 descending 순으로 처리
             var ysDesc = sampleYsAscending.ToArray();
             Array.Sort(ysDesc);
             Array.Reverse(ysDesc);
 
             var map = new Dictionary<int, double>(ysDesc.Length);
-
             double prevX = double.NaN;
 
             foreach (var y in ysDesc)
@@ -275,7 +265,6 @@ namespace WpfApp1.Scripts
 
                 var peaks = FindPeaksAtRow(laneMask8u, y, leftX, rightX);
 
-                // expected for this boundary
                 double t = (TotalLanes == 0) ? 0 : (double)boundaryIndex / TotalLanes;
                 double expected = leftX + (rightX - leftX) * t;
 
@@ -283,22 +272,15 @@ namespace WpfApp1.Scripts
 
                 if (double.IsNaN(prevX))
                 {
-                    // 첫 프레임(가장 아래쪽): expected 근처 peak 우선
                     chosen = SelectPeakNearExpected(peaks, expected, ExpectedWindowPx, fallback: expected);
                 }
                 else
                 {
-                    // 이후: 이전 x 주변 peak를 추적 (핵심)
                     chosen = SelectPeakNearExpected(peaks, prevX, FollowWindowPx, fallback: double.NaN);
-
                     if (double.IsNaN(chosen))
-                    {
-                        // 주변에 peak가 없으면 expected 근처라도 잡아봄
                         chosen = SelectPeakNearExpected(peaks, expected, ExpectedWindowPx, fallback: expected);
-                    }
                 }
 
-                // 경계가 corridor 밖으로 튀지 않게 clamp
                 chosen = Math.Clamp(chosen, leftX, rightX);
 
                 map[y] = chosen;
@@ -343,7 +325,87 @@ namespace WpfApp1.Scripts
         }
 
         // =========================
-        // Draw boundaries + labels
+        // ✅ NEW: peak들을 이어서 polyline 만들기 (점이 충분히 이어진 것만)
+        // =========================
+        private List<Point[]> BuildPeakPolylines(LaneAnalysisResult r)
+        {
+            var mask = r.LaneLineMaskRoi8u;
+            if (mask == null || mask.Empty()) return new List<Point[]>();
+
+            var drive = r.DriveMaskRoi8u;
+            var ys = r.SampleYs;
+            if (ys == null || ys.Length < 2) return new List<Point[]>();
+
+            // y desc로 내려오면서 클러스터 트래킹
+            var ysDesc = ys.ToArray();
+            Array.Sort(ysDesc);
+            Array.Reverse(ysDesc);
+
+            var clusters = new List<List<(int y, int x)>>();
+
+            foreach (var y in ysDesc)
+            {
+                int leftX = 0;
+                int rightX = mask.Width - 1;
+
+                if (drive != null && !drive.Empty())
+                {
+                    GetCorridorLRAtRow(drive, y, out leftX, out rightX);
+                    if (rightX - leftX < mask.Width * 0.35)
+                    {
+                        leftX = 0;
+                        rightX = mask.Width - 1;
+                    }
+                }
+
+                var peaks = FindPeaksAtRow(mask, y, leftX, rightX);
+
+                foreach (var px in peaks)
+                {
+                    // 가장 가까운 클러스터(마지막 점 x 기준)로 붙이기
+                    int bestC = -1;
+                    int bestDx = int.MaxValue;
+
+                    for (int ci = 0; ci < clusters.Count; ci++)
+                    {
+                        var last = clusters[ci][^1];
+                        int dx = Math.Abs(last.x - px);
+                        if (dx <= PeakPolylineFollowX && dx < bestDx)
+                        {
+                            bestDx = dx;
+                            bestC = ci;
+                        }
+                    }
+
+                    if (bestC >= 0)
+                        clusters[bestC].Add((y, px));
+                    else
+                        clusters.Add(new List<(int y, int x)> { (y, px) });
+                }
+            }
+
+            // 길이(연속성) 부족한 건 버리고 polyline 변환
+            var lines = new List<Point[]>();
+
+            foreach (var c in clusters)
+            {
+                if (c.Count < PeakPolylineMinLen) continue;
+
+                // y 오름차순으로 정렬해서 선 그리기
+                var pts = c.OrderBy(p => p.y)
+                           .Select(p => new Point(r.Roi.X + p.x, r.Roi.Y + p.y))
+                           .ToArray();
+
+                // 너무 짧은 경우 제외(안전)
+                if (pts.Length >= 2)
+                    lines.Add(pts);
+            }
+
+            return lines;
+        }
+
+        // =========================
+        // Draw
         // =========================
         public void DrawOnFrame(Mat frame, LaneAnalysisResult r)
         {
@@ -351,10 +413,26 @@ namespace WpfApp1.Scripts
 
             Cv2.Rectangle(frame, r.Roi, Scalar.White, 1);
 
+            // ✅ 1) "빨간점 기반 흰색 polyline"만 그리고 싶다 (요구사항)
+            if (DebugDrawPeakPolylines)
+            {
+                var polylines = BuildPeakPolylines(r);
+                foreach (var pl in polylines)
+                    Cv2.Polylines(frame, new[] { pl }, false, Scalar.White, 2, LineTypes.AntiAlias);
+            }
+
+            // ✅ 2) 필요하면 peak 점(빨간점)도 같이 표시
+            if (DebugDrawLanePeaksDots)
+            {
+                DrawLanePeaksDots(frame, r);
+            }
+
+            // (옵션) 기존 강제 boundary 라인
+            if (!DebugDrawBoundaries) return;
+
             int[] ys = r.SampleYs;
             if (ys == null || ys.Length < 2) return;
 
-            // boundary polylines
             for (int bi = 0; bi < r.BoundaryLines.Count; bi++)
             {
                 var (a, b) = r.BoundaryLines[bi];
@@ -371,7 +449,8 @@ namespace WpfApp1.Scripts
                 Cv2.Polylines(frame, new[] { pts.ToArray() }, false, Scalar.White, 2);
             }
 
-            // lane labels near bottom
+            if (!DebugDrawLabels) return;
+
             int yLabelRoi = (int)(r.Roi.Height * 0.92);
             yLabelRoi = Math.Clamp(yLabelRoi, 0, r.Roi.Height - 1);
 
@@ -385,6 +464,37 @@ namespace WpfApp1.Scripts
                 var pt = new Point(r.Roi.X + cx, r.Roi.Y + yLabelRoi);
                 var color = (lane == EgoLane) ? Scalar.Yellow : Scalar.White;
                 Cv2.PutText(frame, $"#{lane}", pt, HersheyFonts.HersheySimplex, 0.9, color, 2);
+            }
+        }
+
+        private void DrawLanePeaksDots(Mat frame, LaneAnalysisResult r)
+        {
+            var laneMask8u = r.LaneLineMaskRoi8u;
+            if (laneMask8u == null || laneMask8u.Empty()) return;
+
+            Mat? drive = r.DriveMaskRoi8u;
+
+            foreach (var y in r.SampleYs)
+            {
+                int leftX = 0;
+                int rightX = laneMask8u.Width - 1;
+
+                if (drive != null && !drive.Empty())
+                {
+                    GetCorridorLRAtRow(drive, y, out leftX, out rightX);
+                    if (rightX - leftX < laneMask8u.Width * 0.35)
+                    {
+                        leftX = 0;
+                        rightX = laneMask8u.Width - 1;
+                    }
+                }
+
+                var peaks = FindPeaksAtRow(laneMask8u, y, leftX, rightX);
+                foreach (var px in peaks)
+                {
+                    var pt = new Point(r.Roi.X + px, r.Roi.Y + y);
+                    Cv2.Circle(frame, pt, 3, new Scalar(0, 0, 255), -1, LineTypes.AntiAlias);
+                }
             }
         }
 
@@ -438,7 +548,7 @@ namespace WpfApp1.Scripts
             }
 
             ys = ys.Distinct().ToArray();
-            Array.Sort(ys); // top -> bottom
+            Array.Sort(ys);
             return ys;
         }
 
