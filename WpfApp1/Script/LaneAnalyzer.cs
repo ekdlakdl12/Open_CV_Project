@@ -1,4 +1,9 @@
-﻿using OpenCvSharp;
+﻿// LaneAnalyzer.cs (FULL REPLACEMENT - EgoLane boundary follows red laneProb peaks)
+// - EgoLane 좌/우 경계(2개)는 "빨간선(peak)"을 아래->위로 추적하며 따라감
+// - 나머지 경계는 corridor 등분 + peak 보정(fallback)
+// - DrawOnFrame / TryGetLaneNumberForPoint API는 그대로 유지
+
+using OpenCvSharp;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -7,408 +12,585 @@ namespace WpfApp1.Scripts
 {
     public sealed class LaneAnalyzer
     {
-        // ===== UI Inject =====
-        public int TotalLanes { get; set; } = 5; // 2..8
-        public int EgoLane { get; set; } = 4;    // 1..TotalLanes
+        // =========================
+        // Public tuning params (기존과 호환)
+        // =========================
+        public int TotalLanes { get; set; } = 5;   // 2..8
+        public int EgoLane { get; set; } = 3;      // 1..TotalLanes
 
-        // ===== ROI =====
         public float RoiYStartRatio { get; set; } = 0.52f;
         public float RoiXMarginRatio { get; set; } = 0.02f;
 
-        // ===== Inputs =====
-        private Mat? _driveMask; // CV_8UC1 0/255 original size
-        public void SetDrivableMask(Mat? driveMask8u) => _driveMask = driveMask8u;
+        public float LaneProbThreshold { get; set; } = 0.45f;
 
-        // ===== LaneProb -> LaneLineMask =====
-        public float LaneProbThreshold { get; set; } = 0.45f;     // 차선경계(빨강) threshold
-        public bool UseDrivableGate { get; set; } = true;         // lane을 drive 안으로 제한
-        public int GateErodeK { get; set; } = 9;                  // drive를 살짝 깎아서(갓길/벽 제거)
-        public int LaneMaskOpenK { get; set; } = 3;               // 잡음 제거
-        public int LaneMaskCloseK { get; set; } = 5;              // 끊긴 선 연결(너무 키우면 굵어짐)
+        public bool UseDrivableGate { get; set; } = true;
+        public int GateErodeK { get; set; } = 9;
 
-        // ===== Road corridor (from drivable) =====
+        public int LaneMaskOpenK { get; set; } = 3;
+        public int LaneMaskCloseK { get; set; } = 5;
+
+        // (호환용)
         public int CorridorBottomBandH { get; set; } = 60;
-        public int CorridorSampleStepY { get; set; } = 6;
-        public int CorridorSmoothWin { get; set; } = 5; // moving average
 
-        // ===== Boundary extraction =====
-        public int BoundarySearchRadius { get; set; } = 18;       // laneLine 근처 스냅 범위(px)
-        public int BoundaryMinPeakStrength { get; set; } = 25;    // bottom band에서 laneLine column count 최소치
+        // =========================
+        // NEW: "빨간선 따라가기" 파라미터
+        // =========================
+        public int SampleBandCount { get; set; } = 18;
 
-        // ===== Debug drawing =====
-        public bool DrawDebug { get; set; } = true;
-        public bool DrawLaneLines { get; set; } = true;
-        public bool DrawCorridor { get; set; } = true;
-        public bool DrawBoundaries { get; set; } = true;
-        public bool DrawLaneLabels { get; set; } = true;
+        // ROI 내부에서 샘플링 범위 (너무 위는 laneProb가 약해 흔들림)
+        public float SampleYTopRatio { get; set; } = 0.30f;
+        public float SampleYBottomRatio { get; set; } = 0.95f;
 
+        // 한 row에서 peak 덩어리 최소 길이(약한 빨간선 무시)
+        public int PeakMinStrength { get; set; } = 6;
+
+        // peak 병합 최소 간격
+        public int PeakMinGapPx { get; set; } = 18;
+
+        // expected 근처 탐색 폭 (나머지 경계용)
+        public int ExpectedWindowPx { get; set; } = 90;
+
+        // ✅ 핵심: EgoLane 경계 peak를 아래->위로 추적할 때 허용 이동 폭
+        public int FollowWindowPx { get; set; } = 75;
+
+        // ✅ EgoLane 경계는 가능한 한 peak를 강제 사용
+        public bool PreferLaneProbForEgoBoundaries { get; set; } = true;
+
+        // =========================
+        // Drivable mask(원본크기, CV_8UC1 0/255)
+        // =========================
+        private Mat? _drivableMaskOrig;
+
+        public void SetDrivableMask(Mat? drivableMaskOrig)
+        {
+            _drivableMaskOrig?.Dispose();
+            _drivableMaskOrig = drivableMaskOrig?.Clone();
+        }
+
+        // =========================
+        // Result types
+        // =========================
         public sealed class LaneAnalysisResult
         {
+            public int Width;
+            public int Height;
+
             public Rect Roi;
-            public int EgoLane = -1;
-            public int TotalLanes = -1;
 
-            // ROI 좌표계에서 boundary X들의 리스트(항상 Count = TotalLanes+1)
-            public List<float> BoundariesX_Roi = new();
+            // boundaries count = TotalLanes + 1
+            // each boundary is x = a*y + b  (ROI 좌표계)
+            public List<(double a, double b)> BoundaryLines = new();
 
-            // Debug mats (ROI)
-            public Mat? LaneLineMaskRoi; // CV_8UC1
-            public Mat? DriveRoi;        // CV_8UC1
-            public string DebugLine = "";
+            public int[] SampleYs = Array.Empty<int>();
+
+            // optional debug (caller disposes)
+            public Mat? LaneLineMaskRoi8u;
+            public Mat? DriveMaskRoi8u;
         }
 
-        public LaneAnalysisResult Analyze(Mat laneProb32f, int frameW, int frameH)
+        // =========================
+        // Main entry
+        // =========================
+        public LaneAnalysisResult Analyze(Mat laneProbOrig32f, int frameW, int frameH)
         {
-            if (laneProb32f == null || laneProb32f.Empty())
-                throw new ArgumentException("laneProb32f is empty");
-            if (laneProb32f.Type() != MatType.CV_32FC1)
-                throw new ArgumentException($"laneProb32f must be CV_32FC1, got {laneProb32f.Type()}");
+            if (laneProbOrig32f == null || laneProbOrig32f.Empty())
+                throw new ArgumentException("laneProbOrig32f is empty");
 
-            TotalLanes = Math.Clamp(TotalLanes, 2, 8);
-            EgoLane = Math.Clamp(EgoLane, 1, TotalLanes);
+            int y0 = (int)(frameH * RoiYStartRatio);
+            y0 = Math.Clamp(y0, 0, frameH - 2);
 
-            var roi = BuildRoi(frameW, frameH);
+            int xMargin = (int)(frameW * RoiXMarginRatio);
+            xMargin = Math.Clamp(xMargin, 0, frameW / 4);
 
-            // --- ROI crop
-            using var probRoi = new Mat(laneProb32f, roi);
-            Mat? driveRoi = null;
-            if (_driveMask != null && !_driveMask.Empty())
-                driveRoi = new Mat(_driveMask, roi);
+            var roi = new Rect(xMargin, y0, frameW - xMargin * 2, frameH - y0);
+            if (roi.Width < 50 || roi.Height < 50)
+                throw new Exception($"ROI too small: {roi}");
 
-            // 1) laneProb -> laneLineMask(빨강용)
-            using var laneLineMask = BuildLaneLineMask(probRoi, driveRoi);
+            using var laneProbRoi = new Mat(laneProbOrig32f, roi); // CV_32F ROI view
 
-            // 2) corridor edges from drivable
-            var (leftEdgeX, rightEdgeX, okCorr) = EstimateCorridorEdges(driveRoi, roi.Width, roi.Height);
+            // 1) lane line mask (빨간선 후보)
+            using var laneMask = BuildLaneLineMaskFast(laneProbRoi); // CV_8U 0/255
 
-            // 3) bottom band histogram peaks from laneLineMask
-            var peakXs = FindLanePeaksInBottomBand(laneLineMask, roi.Width, roi.Height);
-
-            // 4) Build boundaries: always TotalLanes+1
-            var boundaries = BuildBoundariesHybrid(leftEdgeX, rightEdgeX, okCorr, peakXs, roi.Width);
-
-            var res = new LaneAnalysisResult
+            // 2) drivable ROI gate
+            Mat? driveRoi8u = null;
+            if (UseDrivableGate && _drivableMaskOrig != null && !_drivableMaskOrig.Empty())
             {
+                using var driveRoiView = new Mat(_drivableMaskOrig, roi);
+                driveRoi8u = driveRoiView.Clone();
+
+                int k = MakeOdd(GateErodeK);
+                if (k >= 3)
+                {
+                    using var kernel = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(k, k));
+                    Cv2.Erode(driveRoi8u, driveRoi8u, kernel);
+                }
+
+                // gate 적용: laneMask = laneMask & driveRoi
+                Cv2.BitwiseAnd(laneMask, driveRoi8u, laneMask);
+            }
+
+            // 3) y 샘플 생성 (ROI 내부)
+            var sampleYs = BuildSampleYs(roi.Height);
+
+            // 4) 각 boundary별 (y,x) 점 수집
+            var boundaryPoints = new List<List<Point2d>>();
+            for (int i = 0; i < TotalLanes + 1; i++)
+                boundaryPoints.Add(new List<Point2d>(sampleYs.Length));
+
+            int egoLeftB = Math.Clamp(EgoLane - 1, 0, TotalLanes); // boundary index
+            int egoRightB = Math.Clamp(EgoLane, 0, TotalLanes);
+
+            // 4-1) ✅ EgoLane 경계 2개는 "peak 추적"으로 x(y) 시퀀스를 먼저 만든다
+            Dictionary<int, double>? egoLeftXByY = null;
+            Dictionary<int, double>? egoRightXByY = null;
+
+            if (PreferLaneProbForEgoBoundaries)
+            {
+                egoLeftXByY = FollowBoundaryByPeaks(
+                    laneMask, driveRoi8u, sampleYs,
+                    boundaryIndex: egoLeftB);
+
+                egoRightXByY = FollowBoundaryByPeaks(
+                    laneMask, driveRoi8u, sampleYs,
+                    boundaryIndex: egoRightB);
+            }
+
+            // 4-2) boundary points 채우기
+            foreach (var y in sampleYs)
+            {
+                int leftX = 0;
+                int rightX = roi.Width - 1;
+
+                if (driveRoi8u != null && !driveRoi8u.Empty())
+                {
+                    GetCorridorLRAtRow(driveRoi8u, y, out leftX, out rightX);
+                    if (rightX - leftX < roi.Width * 0.35)
+                    {
+                        leftX = 0;
+                        rightX = roi.Width - 1;
+                    }
+                }
+
+                var peaks = FindPeaksAtRow(laneMask, y, leftX, rightX);
+
+                double[] expected = new double[TotalLanes + 1];
+                for (int b = 0; b < expected.Length; b++)
+                {
+                    double t = (double)b / TotalLanes;
+                    expected[b] = leftX + (rightX - leftX) * t;
+                }
+
+                for (int b = 0; b < TotalLanes + 1; b++)
+                {
+                    double bx;
+
+                    if (b == 0) bx = leftX;
+                    else if (b == TotalLanes) bx = rightX;
+                    else if (PreferLaneProbForEgoBoundaries && (b == egoLeftB || b == egoRightB))
+                    {
+                        // ✅ EgoLane 경계는 추적값 우선
+                        var dict = (b == egoLeftB) ? egoLeftXByY : egoRightXByY;
+                        if (dict != null && dict.TryGetValue(y, out var v))
+                            bx = v;
+                        else
+                            bx = SelectPeakNearExpected(peaks, expected[b], ExpectedWindowPx, fallback: expected[b]);
+                    }
+                    else
+                    {
+                        // 나머지는 expected 근처 peak 있으면 사용, 없으면 expected
+                        bx = SelectPeakNearExpected(peaks, expected[b], ExpectedWindowPx, fallback: expected[b]);
+                    }
+
+                    boundaryPoints[b].Add(new Point2d(y, bx)); // (y,x)
+                }
+            }
+
+            // 5) boundary line fit (x = a*y + b)
+            var lines = new List<(double a, double b)>(TotalLanes + 1);
+            for (int b = 0; b < TotalLanes + 1; b++)
+            {
+                var pts = boundaryPoints[b];
+
+                // outlier 완화
+                var filtered = FilterOutliersByMedianX(pts, 70);
+
+                var (a, bb) = FitLineXofY(filtered.Count >= 6 ? filtered : pts);
+
+                // 기울기 제한(뒤집힘 방지)
+                a = Math.Clamp(a, -2.0, 2.0);
+
+                lines.Add((a, bb));
+            }
+
+            // 6) 결과
+            var result = new LaneAnalysisResult
+            {
+                Width = frameW,
+                Height = frameH,
                 Roi = roi,
-                EgoLane = EgoLane,
-                TotalLanes = TotalLanes,
-                BoundariesX_Roi = boundaries,
-                LaneLineMaskRoi = laneLineMask.Clone(),
-                DriveRoi = driveRoi?.Clone(),
-                DebugLine = $"bnd:{boundaries.Count - 1} lanes:{TotalLanes} egoUI:{EgoLane}/{TotalLanes} thr:{LaneProbThreshold:0.00} gate:{(UseDrivableGate ? 1 : 0)}"
+                BoundaryLines = lines,
+                SampleYs = sampleYs,
+
+                LaneLineMaskRoi8u = laneMask.Clone(),
+                DriveMaskRoi8u = driveRoi8u?.Clone()
             };
 
-            driveRoi?.Dispose();
-            return res;
+            driveRoi8u?.Dispose();
+            return result;
         }
 
-        // 차량 바닥점(framePoint)이 몇 차선인지(1..TotalLanes)
-        public bool TryGetLaneNumberForPoint(LaneAnalysisResult r, Point framePoint, out int laneNum)
+        // =========================
+        // ✅ Ego boundary "Follow" (bottom -> top)
+        // =========================
+        private Dictionary<int, double> FollowBoundaryByPeaks(
+            Mat laneMask8u,
+            Mat? driveRoi8u,
+            int[] sampleYsAscending,
+            int boundaryIndex)
+        {
+            // boundaryIndex: 0..TotalLanes
+            // 우리는 sampleYs를 "가까운 아래쪽부터 위쪽으로" 추적해야 하므로 descending 순으로 처리
+            var ysDesc = sampleYsAscending.ToArray();
+            Array.Sort(ysDesc);
+            Array.Reverse(ysDesc);
+
+            var map = new Dictionary<int, double>(ysDesc.Length);
+
+            double prevX = double.NaN;
+
+            foreach (var y in ysDesc)
+            {
+                int leftX = 0;
+                int rightX = laneMask8u.Width - 1;
+
+                if (driveRoi8u != null && !driveRoi8u.Empty())
+                {
+                    GetCorridorLRAtRow(driveRoi8u, y, out leftX, out rightX);
+                    if (rightX - leftX < laneMask8u.Width * 0.35)
+                    {
+                        leftX = 0;
+                        rightX = laneMask8u.Width - 1;
+                    }
+                }
+
+                var peaks = FindPeaksAtRow(laneMask8u, y, leftX, rightX);
+
+                // expected for this boundary
+                double t = (TotalLanes == 0) ? 0 : (double)boundaryIndex / TotalLanes;
+                double expected = leftX + (rightX - leftX) * t;
+
+                double chosen;
+
+                if (double.IsNaN(prevX))
+                {
+                    // 첫 프레임(가장 아래쪽): expected 근처 peak 우선
+                    chosen = SelectPeakNearExpected(peaks, expected, ExpectedWindowPx, fallback: expected);
+                }
+                else
+                {
+                    // 이후: 이전 x 주변 peak를 추적 (핵심)
+                    chosen = SelectPeakNearExpected(peaks, prevX, FollowWindowPx, fallback: double.NaN);
+
+                    if (double.IsNaN(chosen))
+                    {
+                        // 주변에 peak가 없으면 expected 근처라도 잡아봄
+                        chosen = SelectPeakNearExpected(peaks, expected, ExpectedWindowPx, fallback: expected);
+                    }
+                }
+
+                // 경계가 corridor 밖으로 튀지 않게 clamp
+                chosen = Math.Clamp(chosen, leftX, rightX);
+
+                map[y] = chosen;
+                prevX = chosen;
+            }
+
+            return map;
+        }
+
+        // =========================
+        // Lane number for point
+        // =========================
+        public bool TryGetLaneNumberForPoint(LaneAnalysisResult r, Point pFrame, out int laneNum)
         {
             laneNum = -1;
-            if (r == null) return false;
-            if (r.BoundariesX_Roi == null || r.BoundariesX_Roi.Count < 3) return false;
-
-            // ROI check
-            if (framePoint.X < r.Roi.Left || framePoint.X >= r.Roi.Right ||
-                framePoint.Y < r.Roi.Top || framePoint.Y >= r.Roi.Bottom)
+            if (r == null || r.BoundaryLines == null || r.BoundaryLines.Count < 3)
                 return false;
 
-            float xRoi = framePoint.X - r.Roi.Left;
+            if (!r.Roi.Contains(pFrame))
+                return false;
 
-            // boundaries: x0 < x1 < ... < xN
-            // lane index = i where xi <= x < x(i+1)
-            int nLanes = r.TotalLanes;
-            for (int i = 0; i < nLanes; i++)
+            int xRoi = pFrame.X - r.Roi.X;
+            int yRoi = pFrame.Y - r.Roi.Y;
+
+            var xs = new double[r.BoundaryLines.Count];
+            for (int i = 0; i < r.BoundaryLines.Count; i++)
             {
-                float a = r.BoundariesX_Roi[i];
-                float b = r.BoundariesX_Roi[i + 1];
-                if (xRoi >= a && xRoi < b)
-                {
-                    laneNum = i + 1; // 절대차선 1..TotalLanes
-                    return true;
-                }
+                var (a, b) = r.BoundaryLines[i];
+                xs[i] = a * yRoi + b;
             }
 
-            return false;
+            // monotonic 보정
+            for (int i = 1; i < xs.Length; i++)
+                if (xs[i] < xs[i - 1] + 2) xs[i] = xs[i - 1] + 2;
+
+            int idx = 0;
+            while (idx < xs.Length && xRoi >= xs[idx]) idx++;
+
+            int lane = Math.Clamp(idx, 1, TotalLanes);
+            laneNum = lane;
+            return true;
         }
 
+        // =========================
+        // Draw boundaries + labels
+        // =========================
         public void DrawOnFrame(Mat frame, LaneAnalysisResult r)
         {
-            if (!DrawDebug || frame == null || frame.Empty() || r == null) return;
+            if (frame == null || frame.Empty() || r == null) return;
 
-            Cv2.Rectangle(frame, r.Roi, Scalar.White, 2);
-            using var frameRoi = new Mat(frame, r.Roi);
+            Cv2.Rectangle(frame, r.Roi, Scalar.White, 1);
 
-            // Lane line overlay
-            if (DrawLaneLines && r.LaneLineMaskRoi != null && !r.LaneLineMaskRoi.Empty())
+            int[] ys = r.SampleYs;
+            if (ys == null || ys.Length < 2) return;
+
+            // boundary polylines
+            for (int bi = 0; bi < r.BoundaryLines.Count; bi++)
             {
-                using var ov = frameRoi.Clone();
-                ov.SetTo(new Scalar(0, 0, 255), r.LaneLineMaskRoi);
-                Cv2.AddWeighted(ov, 0.14, frameRoi, 0.86, 0, frameRoi);
-            }
+                var (a, b) = r.BoundaryLines[bi];
 
-            // Drive overlay (optional)
-            if (DrawCorridor && r.DriveRoi != null && !r.DriveRoi.Empty())
-            {
-                using var ov = frameRoi.Clone();
-                ov.SetTo(new Scalar(0, 255, 0), r.DriveRoi);
-                Cv2.AddWeighted(ov, 0.10, frameRoi, 0.90, 0, frameRoi);
-            }
-
-            // Boundaries
-            if (DrawBoundaries && r.BoundariesX_Roi != null && r.BoundariesX_Roi.Count == r.TotalLanes + 1)
-            {
-                for (int i = 0; i < r.BoundariesX_Roi.Count; i++)
+                var pts = new List<Point>(ys.Length);
+                foreach (var y in ys)
                 {
-                    int x = (int)Math.Round(r.BoundariesX_Roi[i]);
-                    Cv2.Line(frameRoi, new Point(x, 0), new Point(x, frameRoi.Rows - 1), Scalar.White, 2);
+                    double x = a * y + b;
+                    int xI = (int)Math.Round(x);
+                    xI = Math.Clamp(xI, 0, r.Roi.Width - 1);
+                    pts.Add(new Point(r.Roi.X + xI, r.Roi.Y + y));
                 }
+
+                Cv2.Polylines(frame, new[] { pts.ToArray() }, false, Scalar.White, 2);
             }
 
-            // Labels
-            if (DrawLaneLabels && r.BoundariesX_Roi != null && r.BoundariesX_Roi.Count == r.TotalLanes + 1)
+            // lane labels near bottom
+            int yLabelRoi = (int)(r.Roi.Height * 0.92);
+            yLabelRoi = Math.Clamp(yLabelRoi, 0, r.Roi.Height - 1);
+
+            for (int lane = 1; lane <= TotalLanes; lane++)
             {
-                for (int i = 0; i < r.TotalLanes; i++)
-                {
-                    float mid = 0.5f * (r.BoundariesX_Roi[i] + r.BoundariesX_Roi[i + 1]);
-                    int laneNum = i + 1;
-                    var color = (laneNum == r.EgoLane) ? new Scalar(0, 255, 255) : Scalar.White;
-                    Cv2.PutText(frameRoi, $"#{laneNum}", new Point((int)mid - 10, frameRoi.Rows - 20),
-                        HersheyFonts.HersheySimplex, 0.9, color, 2);
-                }
-            }
+                double xL = EvalX(r.BoundaryLines[lane - 1], yLabelRoi);
+                double xR = EvalX(r.BoundaryLines[lane], yLabelRoi);
+                int cx = (int)Math.Round((xL + xR) * 0.5);
+                cx = Math.Clamp(cx, 0, r.Roi.Width - 1);
 
-            Cv2.PutText(frame, r.DebugLine, new Point(r.Roi.Left + 10, r.Roi.Top + 25),
-                HersheyFonts.HersheySimplex, 0.6, Scalar.White, 2);
+                var pt = new Point(r.Roi.X + cx, r.Roi.Y + yLabelRoi);
+                var color = (lane == EgoLane) ? Scalar.Yellow : Scalar.White;
+                Cv2.PutText(frame, $"#{lane}", pt, HersheyFonts.HersheySimplex, 0.9, color, 2);
+            }
         }
 
         // =========================
-        // Internals
+        // Helpers
         // =========================
-        private Rect BuildRoi(int w, int h)
+        private static int MakeOdd(int k) => (k <= 0) ? 0 : (k % 2 == 1 ? k : k + 1);
+
+        private Mat BuildLaneLineMaskFast(Mat laneProbRoi32f)
         {
-            int y0 = (int)(h * RoiYStartRatio);
-            int xMargin = (int)(w * RoiXMarginRatio);
+            using var prob8u = new Mat();
+            laneProbRoi32f.ConvertTo(prob8u, MatType.CV_8UC1, 255.0);
 
-            y0 = Math.Clamp(y0, 0, h - 1);
-            xMargin = Math.Clamp(xMargin, 0, w / 3);
+            using var bin = new Mat();
+            double thr = 255.0 * Math.Clamp(LaneProbThreshold, 0.05f, 0.95f);
+            Cv2.Threshold(prob8u, bin, thr, 255, ThresholdTypes.Binary);
 
-            int x0 = xMargin;
-            int width = Math.Max(1, w - xMargin * 2);
-            int height = Math.Max(1, h - y0);
+            int ok = MakeOdd(LaneMaskOpenK);
+            if (ok >= 3)
+            {
+                using var kOpen = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(ok, ok));
+                Cv2.MorphologyEx(bin, bin, MorphTypes.Open, kOpen);
+            }
 
-            return new Rect(x0, y0, width, height);
+            int ck = MakeOdd(LaneMaskCloseK);
+            if (ck >= 3)
+            {
+                using var kClose = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(ck, ck));
+                Cv2.MorphologyEx(bin, bin, MorphTypes.Close, kClose);
+            }
+
+            return bin.Clone();
         }
 
-        private Mat BuildLaneLineMask(Mat laneProbRoi32f, Mat? driveRoi8u)
+        private int[] BuildSampleYs(int roiH)
         {
-            // threshold
-            using var mask = new Mat(laneProbRoi32f.Rows, laneProbRoi32f.Cols, MatType.CV_8UC1);
-            for (int y = 0; y < laneProbRoi32f.Rows; y++)
+            int n = Math.Clamp(SampleBandCount, 10, 30);
+
+            int yTop = (int)(roiH * SampleYTopRatio);
+            int yBot = (int)(roiH * SampleYBottomRatio);
+
+            yTop = Math.Clamp(yTop, 0, roiH - 1);
+            yBot = Math.Clamp(yBot, yTop + 5, roiH - 1);
+
+            var ys = new int[n];
+            for (int i = 0; i < n; i++)
             {
-                for (int x = 0; x < laneProbRoi32f.Cols; x++)
-                {
-                    float p = laneProbRoi32f.At<float>(y, x);
-                    mask.Set(y, x, (byte)(p >= LaneProbThreshold ? 255 : 0));
-                }
+                double t = (double)i / (n - 1);
+                double tt = Math.Pow(t, 1.30); // 아래쪽 촘촘
+                ys[i] = (int)Math.Round(yBot - (yBot - yTop) * tt);
             }
 
-            Mat outMask = mask.Clone();
-
-            // drivable gate
-            if (UseDrivableGate && driveRoi8u != null && !driveRoi8u.Empty())
-            {
-                using var gate = driveRoi8u.Clone();
-                int k = Math.Max(1, GateErodeK);
-                if (k % 2 == 0) k++;
-                using var ke = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(k, k));
-                Cv2.Erode(gate, gate, ke); // 갓길/벽쪽 제거
-
-                Cv2.BitwiseAnd(outMask, gate, outMask);
-            }
-
-            // morphology (너무 세게 하면 굵어짐)
-            if (LaneMaskOpenK > 1)
-            {
-                int k = LaneMaskOpenK; if (k % 2 == 0) k++;
-                using var ko = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(k, k));
-                Cv2.MorphologyEx(outMask, outMask, MorphTypes.Open, ko);
-            }
-            if (LaneMaskCloseK > 1)
-            {
-                int k = LaneMaskCloseK; if (k % 2 == 0) k++;
-                using var kc = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(k, k));
-                Cv2.MorphologyEx(outMask, outMask, MorphTypes.Close, kc);
-            }
-
-            return outMask;
+            ys = ys.Distinct().ToArray();
+            Array.Sort(ys); // top -> bottom
+            return ys;
         }
 
-        private (float[] leftEdgeX, float[] rightEdgeX, bool ok) EstimateCorridorEdges(Mat? driveRoi8u, int roiW, int roiH)
+        private void GetCorridorLRAtRow(Mat driveRoi8u, int y, out int leftX, out int rightX)
         {
-            // drive가 없으면 ROI 전체를 corridor로 가정
-            if (driveRoi8u == null || driveRoi8u.Empty())
+            leftX = 0;
+            rightX = driveRoi8u.Width - 1;
+
+            var idx = driveRoi8u.GetGenericIndexer<byte>();
+            int w = driveRoi8u.Width;
+
+            int l = -1, r = -1;
+            for (int x = 0; x < w; x++)
             {
-                float[] l0 = Enumerable.Repeat(0f, roiH).ToArray();
-                float[] r0 = Enumerable.Repeat((float)(roiW - 1), roiH).ToArray();
-                return (l0, r0, false);
+                if (idx[y, x] != 0) { l = x; break; }
+            }
+            for (int x = w - 1; x >= 0; x--)
+            {
+                if (idx[y, x] != 0) { r = x; break; }
             }
 
-            float[] left = new float[roiH];
-            float[] right = new float[roiH];
-
-            // 기본값
-            for (int y = 0; y < roiH; y++) { left[y] = 0; right[y] = roiW - 1; }
-
-            int bandH = Math.Clamp(CorridorBottomBandH, 20, roiH);
-            int yStart = Math.Max(0, roiH - bandH);
-
-            int okCount = 0;
-            for (int y = yStart; y < roiH; y += Math.Max(1, CorridorSampleStepY))
+            if (l >= 0 && r >= 0 && r > l)
             {
-                int lx = -1, rx = -1;
-
-                // leftmost
-                for (int x = 0; x < roiW; x++)
-                {
-                    if (driveRoi8u.At<byte>(y, x) != 0) { lx = x; break; }
-                }
-                // rightmost
-                for (int x = roiW - 1; x >= 0; x--)
-                {
-                    if (driveRoi8u.At<byte>(y, x) != 0) { rx = x; break; }
-                }
-
-                if (lx >= 0 && rx >= 0 && rx - lx > roiW * 0.35)
-                {
-                    left[y] = lx;
-                    right[y] = rx;
-                    okCount++;
-                }
+                leftX = l;
+                rightX = r;
             }
-
-            // 간단한 smoothing (moving avg)
-            left = Smooth1D(left, CorridorSmoothWin);
-            right = Smooth1D(right, CorridorSmoothWin);
-
-            bool ok = okCount >= 3;
-            return (left, right, ok);
         }
 
-        private static float[] Smooth1D(float[] a, int win)
+        private List<int> FindPeaksAtRow(Mat laneMask8u, int y, int leftX, int rightX)
         {
-            win = Math.Max(1, win);
-            if (win % 2 == 0) win++;
-            int r = win / 2;
+            var idx = laneMask8u.GetGenericIndexer<byte>();
 
-            float[] o = new float[a.Length];
-            for (int i = 0; i < a.Length; i++)
+            leftX = Math.Clamp(leftX, 0, laneMask8u.Width - 1);
+            rightX = Math.Clamp(rightX, 0, laneMask8u.Width - 1);
+            if (rightX <= leftX) return new List<int>();
+
+            var peaks = new List<int>(8);
+
+            int runStart = -1;
+            int runCount = 0;
+
+            for (int x = leftX; x <= rightX; x++)
             {
-                float sum = 0;
-                int cnt = 0;
-                for (int j = i - r; j <= i + r; j++)
+                bool on = idx[y, x] != 0;
+
+                if (on)
                 {
-                    if (j < 0 || j >= a.Length) continue;
-                    sum += a[j];
-                    cnt++;
+                    if (runStart < 0) { runStart = x; runCount = 1; }
+                    else runCount++;
                 }
-                o[i] = (cnt > 0) ? sum / cnt : a[i];
+                else
+                {
+                    if (runStart >= 0)
+                    {
+                        if (runCount >= PeakMinStrength)
+                        {
+                            int center = (runStart + (x - 1)) / 2;
+                            peaks.Add(center);
+                        }
+                        runStart = -1;
+                        runCount = 0;
+                    }
+                }
             }
-            return o;
-        }
 
-        private List<int> FindLanePeaksInBottomBand(Mat laneLineMaskRoi8u, int roiW, int roiH)
-        {
-            int bandH = Math.Clamp(CorridorBottomBandH, 20, roiH);
-            int y0 = Math.Max(0, roiH - bandH);
-
-            // column histogram
-            int[] hist = new int[roiW];
-            for (int x = 0; x < roiW; x++)
+            if (runStart >= 0 && runCount >= PeakMinStrength)
             {
-                int c = 0;
-                for (int y = y0; y < roiH; y++)
-                    if (laneLineMaskRoi8u.At<byte>(y, x) != 0) c++;
-                hist[x] = c;
+                int center = (runStart + rightX) / 2;
+                peaks.Add(center);
             }
 
-            // peak picking
-            var peaks = new List<(int x, int v)>();
-            for (int x = 2; x < roiW - 2; x++)
-            {
-                int v = hist[x];
-                if (v < BoundaryMinPeakStrength) continue;
-                if (v >= hist[x - 1] && v >= hist[x + 1] && v >= hist[x - 2] && v >= hist[x + 2])
-                    peaks.Add((x, v));
-            }
+            peaks.Sort();
 
-            // 너무 가까운 peak는 합치기
-            peaks = peaks.OrderByDescending(p => p.v).ToList();
-            var selected = new List<int>();
-            int minDist = Math.Max(12, roiW / 80);
+            // merge near peaks
+            var merged = new List<int>(peaks.Count);
             foreach (var p in peaks)
             {
-                if (selected.Any(s => Math.Abs(s - p.x) < minDist)) continue;
-                selected.Add(p.x);
-            }
-
-            selected.Sort();
-            return selected;
-        }
-
-        private List<float> BuildBoundariesHybrid(float[] leftEdgeX, float[] rightEdgeX, bool okCorr, List<int> peakXs, int roiW)
-        {
-            // base corridor edges (bottom 기준으로 잡음)
-            int yBottom = leftEdgeX.Length - 1;
-            float L = okCorr ? leftEdgeX[yBottom] : 0;
-            float R = okCorr ? rightEdgeX[yBottom] : (roiW - 1);
-            if (R - L < roiW * 0.4f) { L = 0; R = roiW - 1; }
-
-            int need = TotalLanes + 1;
-
-            // 우선 내부 경계 후보 = peak 중 corridor 안쪽 것만
-            var insidePeaks = peakXs.Where(x => x > L + 5 && x < R - 5).ToList();
-
-            // 목표: [L, (내부...), R] 형태로 need개 만들기
-            var boundaries = new List<float> { L };
-
-            // 내부가 충분히 있으면 “대략 등분 위치”에 가까운 peak를 채택
-            if (insidePeaks.Count > 0)
-            {
-                for (int k = 1; k < TotalLanes; k++)
+                if (merged.Count == 0) merged.Add(p);
+                else
                 {
-                    float target = L + (R - L) * (k / (float)TotalLanes);
-                    int best = insidePeaks.OrderBy(x => Math.Abs(x - target)).First();
-                    // 너무 중복되면 skip
-                    if (boundaries.Any(b => Math.Abs(b - best) < 10)) continue;
-                    boundaries.Add(best);
+                    int last = merged[merged.Count - 1];
+                    if (p - last < PeakMinGapPx)
+                        merged[merged.Count - 1] = (last + p) / 2;
+                    else
+                        merged.Add(p);
                 }
             }
 
-            boundaries.Add(R);
-            boundaries = boundaries.Distinct().OrderBy(x => x).ToList();
+            return merged;
+        }
 
-            // 부족하면 등분으로 채우기
-            if (boundaries.Count != need)
+        private static double SelectPeakNearExpected(List<int> peaks, double expected, int windowPx, double fallback)
+        {
+            if (peaks == null || peaks.Count == 0) return fallback;
+
+            double best = double.NaN;
+            double bestDist = double.MaxValue;
+
+            foreach (var p in peaks)
             {
-                boundaries.Clear();
-                for (int k = 0; k <= TotalLanes; k++)
-                    boundaries.Add(L + (R - L) * (k / (float)TotalLanes));
+                double d = Math.Abs(p - expected);
+                if (d <= windowPx && d < bestDist)
+                {
+                    bestDist = d;
+                    best = p;
+                }
             }
 
-            // 안전 클램프
-            for (int i = 0; i < boundaries.Count; i++)
-                boundaries[i] = Math.Clamp(boundaries[i], 0, roiW - 1);
-
-            // 단조 증가 보정
-            for (int i = 1; i < boundaries.Count; i++)
-                if (boundaries[i] <= boundaries[i - 1] + 1) boundaries[i] = boundaries[i - 1] + 2;
-
-            boundaries[0] = Math.Max(0, boundaries[0]);
-            boundaries[^1] = Math.Min(roiW - 1, boundaries[^1]);
-
-            return boundaries;
+            return double.IsNaN(best) ? fallback : best;
         }
+
+        private static (double a, double b) FitLineXofY(List<Point2d> ptsYx)
+        {
+            if (ptsYx == null || ptsYx.Count < 2)
+                return (0, ptsYx.Count == 1 ? ptsYx[0].Y : 0);
+
+            double sumY = 0, sumX = 0, sumYY = 0, sumYX = 0;
+            int n = ptsYx.Count;
+
+            for (int i = 0; i < n; i++)
+            {
+                double y = ptsYx[i].X;
+                double x = ptsYx[i].Y;
+                sumY += y;
+                sumX += x;
+                sumYY += y * y;
+                sumYX += y * x;
+            }
+
+            double denom = (n * sumYY - sumY * sumY);
+            if (Math.Abs(denom) < 1e-6)
+            {
+                double avgX = sumX / n;
+                return (0, avgX);
+            }
+
+            double a = (n * sumYX - sumY * sumX) / denom;
+            double b = (sumX - a * sumY) / n;
+            return (a, b);
+        }
+
+        private static List<Point2d> FilterOutliersByMedianX(List<Point2d> ptsYx, double tolPx)
+        {
+            if (ptsYx == null || ptsYx.Count < 6) return ptsYx;
+
+            var xs = ptsYx.Select(p => p.Y).OrderBy(v => v).ToArray();
+            double med = xs[xs.Length / 2];
+
+            return ptsYx.Where(p => Math.Abs(p.Y - med) <= tolPx).ToList();
+        }
+
+        private static double EvalX((double a, double b) line, int y)
+            => line.a * y + line.b;
     }
 }
