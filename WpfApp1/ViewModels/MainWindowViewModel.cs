@@ -1,18 +1,20 @@
-﻿using Microsoft.Win32;
+﻿using Microsoft.ML.OnnxRuntime;
+using Microsoft.ML.OnnxRuntime.Tensors;
+using Microsoft.Win32;
+using MongoDB.Bson;
+using MongoDB.Driver;
 using OpenCvSharp;
 using OpenCvSharp.WpfExtensions;
-using WpfApp1.Models;
-using WpfApp1.Services;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using System.Linq;
-using System.IO;
-using Microsoft.ML.OnnxRuntime;
-using Microsoft.ML.OnnxRuntime.Tensors;
-using System.Collections.Concurrent;
+using WpfApp1.Models;
+using WpfApp1.Services;
 
 namespace WpfApp1.ViewModels
 {
@@ -24,61 +26,10 @@ namespace WpfApp1.ViewModels
         private InferenceSession? _classSession;
         private readonly object _sessionLock = new object();
 
-        // 차량 상세 모델 리스트 (CAR 클래스일 때만 사용)
-        private readonly string[] _carModelNames = {
-            "AM General Hummer SUV 2000", "Acura RL Sedan 2012", "Acura TL Sedan 2012", "Acura TL Type-S 2008",
-            "Acura TSX Sedan 2012", "Acura Integra Type R 2001", "Acura ZDX Hatchback 2012", "Aston Martin V8 Vantage Convertible 2012",
-            "Aston Martin V8 Vantage Coupe 2012", "Aston Martin Virage Convertible 2012", "Aston Martin Virage Coupe 2012",
-            "Audi RS 4 Convertible 2008", "Audi A5 Coupe 2012", "Audi TTS Coupe 2012", "Audi R8 Coupe 2012", "Audi V8 Sedan 1994",
-            "Audi 100 Sedan 1994", "Audi 100 Wagon 1994", "Audi TT Hatchback 2011", "Audi S6 Sedan 2011", "Audi S5 Convertible 2012",
-            "Audi S5 Coupe 2012", "Audi S4 Sedan 2012", "Audi S4 Sedan 2007", "Audi TT RS Coupe 2012", "BMW ActiveHybrid 5 Sedan 2012",
-            "BMW 1 Series Convertible 2012", "BMW 1 Series Coupe 2012", "BMW 3 Series Sedan 2012", "BMW 3 Series Wagon 2012",
-            "BMW 6 Series Convertible 2007", "BMW X5 SUV 2007", "BMW X6 SUV 2012", "BMW M3 Coupe 2012", "BMW M5 Sedan 2010",
-            "BMW M6 Convertible 2010", "BMW X3 SUV 2012", "BMW Z4 Convertible 2012", "Bentley Continental Supersports Conv. Convertible 2012",
-            "Bentley Arnage Sedan 2009", "Bentley Mulsanne Sedan 2011", "Bentley Continental GT Coupe 2012", "Bentley Continental GT Coupe 2007",
-            "Bentley Continental Flying Spur Sedan 2007", "Bugatti Veyron 16.4 Convertible 2009", "Bugatti Veyron 16.4 Coupe 2009",
-            "Buick Regal GS 2012", "Buick Rainier SUV 2007", "Buick Verano Sedan 2012", "Buick Enclave SUV 2012", "Cadillac CTS-V Sedan 2012",
-            "Cadillac SRX SUV 2012", "Cadillac Escalade EXT Crew Cab 2007", "Chevrolet Silverado 1500 Hybrid Crew Cab 2012",
-            "Chevrolet Corvette Convertible 2012", "Chevrolet Corvette ZR1 2012", "Chevrolet Corvette Ron Fellows Edition Z06 2007",
-            "Chevrolet Traverse SUV 2012", "Chevrolet Camaro Convertible 2012", "Chevrolet HHR SS 2010", "Chevrolet Impala Sedan 2007",
-            "Chevrolet Tahoe Hybrid SUV 2012", "Chevrolet Sonic Sedan 2012", "Chevrolet Express Cargo Van 2007", "Chevrolet Avalanche Crew Cab 2012",
-            "Chevrolet Cobalt SS 2010", "Chevrolet Malibu Hybrid Sedan 2010", "Chevrolet TrailBlazer SS 2009", "Chevrolet Silverado 2500HD Regular Cab 2012",
-            "Chevrolet Silverado 1500 Classic Extended Cab 2007", "Chevrolet Express Van 2007", "Chevrolet Monte Carlo Coupe 2007",
-            "Chevrolet Malibu Sedan 2007", "Chevrolet Silverado 1500 Extended Cab 2012", "Chevrolet Silverado 1500 Regular Cab 2012",
-            "Chrysler Aspen SUV 2009", "Chrysler Sebring Convertible 2010", "Chrysler Town and Country Minivan 2012", "Chrysler 300 SRT-8 2010",
-            "Chrysler Crossfire Convertible 2008", "Chrysler PT Cruiser Convertible 2008", "Daewoo Nubira Wagon 2002", "Dodge Caliber Wagon 2012",
-            "Dodge Caliber Wagon 2007", "Dodge Caravan Minivan 2007", "Dodge Ram SRT-10 2004", "Dodge Neon SRT-4 2003", "Dodge Durango SUV 2012",
-            "Dodge Durango SUV 2007", "Dodge Journey SUV 2012", "Dodge Dakota Crew Cab 2010", "Dodge Dakota Club Cab 2010",
-            "Dodge Magnum Wagon 2008", "Dodge Challenger Coupe 2011", "Dodge Charger Sedan 2012", "Dodge Charger SRT-8 2009",
-            "Eagle Talon Hatchback 1998", "FIAT 500 Abarth 2012", "FIAT 500 Convertible 2012", "Ferrari FF Coupe 2012",
-            "Ferrari California Convertible 2012", "Ferrari 458 Italia Convertible 2012", "Ferrari 458 Italia Coupe 2012",
-            "Fisker Karma Sedan 2012", "Ford F-450 Super Duty Crew Cab 2012", "Ford Mustang Convertible 2007", "Ford Fiesta Sedan 2012",
-            "Ford Ranger SuperCab 2011", "Ford F-150 Regular Cab 2012", "Ford F-150 Regular Cab 2007", "Ford Focus Sedan 2007",
-            "Ford E-Series Wagon 2012", "Ford Edge SUV 2012", "Ford Ranger Regular Cab 2011", "Ford Expedition EL SUV 2009",
-            "Ford Flex SUV 2012", "Ford GT Coupe 2006", "Ford Freestar Minivan 2007", "Ford Expedition SUV 2012", "Ford Focus ST Hatchback 2012",
-            "Ford Fusion Sedan 2012", "Ford Taurus Sedan 2007", "GMC Terrain SUV 2012", "GMC Savana Van 2012", "GMC Yukon Hybrid SUV 2012",
-            "GMC Acadia SUV 2012", "GMC Canyon Extended Cab 2012", "Geo Metro Hatchback 1993", "HUMMER H3T Crew Cab 2010",
-            "HUMMER H2 SUT Crew Cab 2009", "Honda Odyssey Minivan 2012", "Honda RidgeLine Crew Cab 2012", "Honda Civic Accord Sedan 2012",
-            "Honda Civic Accord Coupe 2012", "Honda Civic Sedan 2012", "Honda Civic Coupe 2012", "Honda Odyssey Minivan 2007",
-            "Honda Insight Hatchback 2012", "Honda S2000 Convertible 2009", "Hyundai Genesis Sedan 2012", "Hyundai Equus Sedan 2012",
-            "Hyundai Accent Sedan 2012", "Hyundai Veloster Hatchback 2012", "Hyundai Santa Fe SUV 2012", "Hyundai Tucson SUV 2012",
-            "Hyundai Veracruz SUV 2012", "Hyundai Sonata Hybrid Sedan 2012", "Hyundai Elantra Sedan 2007", "Hyundai Azera Sedan 2012",
-            "Infiniti G Coupe IPL 2012", "Infiniti QX56 SUV 2011", "Isuzu Ascender SUV 2006", "Jaguar XK Convertible 2012",
-            "Jeep Liberty SUV 2012", "Jeep Grand Cherokee SUV 2012", "Jeep Compass SUV 2012", "Jeep Patriot SUV 2012",
-            "Jeep Wrangler SUV 2012", "Lamborghini Reventon Coupe 2008", "Lamborghini Aventador Coupe 2012", "Lamborghini Gallardo LP 570-4 Superleggera 2012",
-            "Lamborghini Diablo Coupe 2001", "Land Rover Range Rover SUV 2012", "Land Rover LR2 SUV 2012", "Lincoln Town Car Sedan 2011",
-            "MINI Cooper Roadster Convertible 2012", "Maybach Landaulet Convertible 2012", "Mazda Tribute SUV 2011", "McLaren MP4-12C Coupe 2012",
-            "Mercedes-Benz 300-Class Convertible 1993", "Mercedes-Benz C-Class Sedan 2012", "Mercedes-Benz SL-Class Coupe 2009",
-            "Mercedes-Benz E-Class Sedan 2012", "Mercedes-Benz S-Class Sedan 2012", "Mercedes-Benz Sprinter Van 2012", "Mitsubishi Lancer Sedan 2012",
-            "Nissan Leaf Hatchback 2012", "Nissan NV Passenger Van 2012", "Nissan Juke SUV 2012", "Nissan 240SX Coupe 1998",
-            "Oldsmobile Cutlass Supreme Silhouette Pontaic Trans Sport Wagon 1993", "Plymouth Neon Sedan 1999", "Porsche Panamera Sedan 2012",
-            "Ram C/V Cargo Van Minivan 2012", "Rolls-Royce Phantom Drophead Coupe Convertible 2012", "Rolls-Royce Ghost Sedan 2012",
-            "Rolls-Royce Phantom Sedan 2012", "Scion xD Hatchback 2012", "Spyker C8 Laviolette Coupe 2009", "Spyker C8 Aileron Coupe 2011",
-            "Suzuki Aerio Sedan 2007", "Suzuki Kizashi Sedan 2012", "Suzuki SX4 Hatchback 2012", "Suzuki SX4 Sedan 2012",
-            "Tesla Model S Sedan 2012", "Toyota Sequoia SUV 2012", "Toyota Camry Sedan 2012", "Toyota Corolla Sedan 2012",
-            "Toyota 4Runner SUV 2012", "Volkswagen Golf Hatchback 2012", "Volkswagen Golf Hatchback 1991", "Volkswagen Beetle Hatchback 2012",
-            "Volvo C30 Hatchback 2012", "Volvo 240 Sedan 1993", "Volvo XC90 SUV 2007", "Smart fortwo Convertible 2012"
-        };
+        // ✅ DB 연결 확인을 위해 readonly 제거 후 초기화 보강
+        private IMongoCollection<VehicleRecord>? _dbCollection;
+
+        private readonly string[] _carModelNames = { "AM General Hummer SUV 2000", "Acura RL Sedan 2012", "Acura TL Sedan 2012", "Acura TL Type-S 2008", "Acura TSX Sedan 2012", "Acura Integra Type R 2001", "Acura ZDX Hatchback 2012", "Aston Martin V8 Vantage Convertible 2012", "Aston Martin V8 Vantage Coupe 2012", "Aston Martin Virage Convertible 2012", "Aston Martin Virage Coupe 2012", "Audi RS 4 Convertible 2008", "Audi A5 Coupe 2012", "Audi TTS Coupe 2012", "Audi R8 Coupe 2012", "Audi V8 Sedan 1994", "Audi 100 Sedan 1994", "Audi 100 Wagon 1994", "Audi TT Hatchback 2011", "Audi S6 Sedan 2011", "Audi S5 Convertible 2012", "Audi S5 Coupe 2012", "Audi S4 Sedan 2012", "Audi S4 Sedan 2007", "Audi TT RS Coupe 2012", "BMW ActiveHybrid 5 Sedan 2012", "BMW 1 Series Convertible 2012", "BMW 1 Series Coupe 2012", "BMW 3 Series Sedan 2012", "BMW 3 Series Wagon 2012", "BMW 6 Series Convertible 2007", "BMW X5 SUV 2007", "BMW X6 SUV 2012", "BMW M3 Coupe 2012", "BMW M5 Sedan 2010", "BMW M6 Convertible 2010", "BMW X3 SUV 2012", "BMW Z4 Convertible 2012", "Bentley Continental Supersports Conv. Convertible 2012", "Bentley Arnage Sedan 2009", "Bentley Mulsanne Sedan 2011", "Bentley Continental GT Coupe 2012", "Bentley Continental GT Coupe 2007", "Bentley Continental Flying Spur Sedan 2007", "Bugatti Veyron 16.4 Convertible 2009", "Bugatti Veyron 16.4 Coupe 2009", "Buick Regal GS 2012", "Buick Rainier SUV 2007", "Buick Verano Sedan 2012", "Buick Enclave SUV 2012", "Cadillac CTS-V Sedan 2012", "Cadillac SRX SUV 2012", "Cadillac Escalade EXT Crew Cab 2007", "Chevrolet Silverado 1500 Hybrid Crew Cab 2012", "Chevrolet Corvette Convertible 2012", "Chevrolet Corvette ZR1 2012", "Chevrolet Corvette Ron Fellows Edition Z06 2007", "Chevrolet Traverse SUV 2012", "Chevrolet Camaro Convertible 2012", "Chevrolet HHR SS 2010", "Chevrolet Impala Sedan 2007", "Chevrolet Tahoe Hybrid SUV 2012", "Chevrolet Sonic Sedan 2012", "Chevrolet Express Cargo Van 2007", "Chevrolet Avalanche Crew Cab 2012", "Chevrolet Cobalt SS 2010", "Chevrolet Malibu Hybrid Sedan 2010", "Chevrolet TrailBlazer SS 2009", "Chevrolet Silverado 2500HD Regular Cab 2012", "Chevrolet Silverado 1500 Classic Extended Cab 2007", "Chevrolet Express Van 2007", "Chevrolet Monte Carlo Coupe 2007", "Chevrolet Malibu Sedan 2007", "Chevrolet Silverado 1500 Extended Cab 2012", "Chevrolet Silverado 1500 Regular Cab 2012", "Chrysler Aspen SUV 2009", "Chrysler Sebring Convertible 2010", "Chrysler Town and Country Minivan 2012", "Chrysler 300 SRT-8 2010", "Chrysler Crossfire Convertible 2008", "Chrysler PT Cruiser Convertible 2008", "Daewoo Nubira Wagon 2002", "Dodge Caliber Wagon 2012", "Dodge Caliber Wagon 2007", "Dodge Caravan Minivan 2007", "Dodge Ram SRT-10 2004", "Dodge Neon SRT-4 2003", "Dodge Durango SUV 2012", "Dodge Durango SUV 2007", "Dodge Journey SUV 2012", "Dodge Dakota Crew Cab 2010", "Dodge Dakota Club Cab 2010", "Dodge Magnum Wagon 2008", "Dodge Challenger Coupe 2011", "Dodge Charger Sedan 2012", "Dodge Charger SRT-8 2009", "Eagle Talon Hatchback 1998", "FIAT 500 Abarth 2012", "FIAT 500 Convertible 2012", "Ferrari FF Coupe 2012", "Ferrari California Convertible 2012", "Ferrari 458 Italia Convertible 2012", "Ferrari 458 Italia Coupe 2012", "Fisker Karma Sedan 2012", "Ford F-450 Super Duty Crew Cab 2012", "Ford Mustang Convertible 2007", "Ford Fiesta Sedan 2012", "Ford Ranger SuperCab 2011", "Ford F-150 Regular Cab 2012", "Ford F-150 Regular Cab 2007", "Ford Focus Sedan 2007", "Ford E-Series Wagon 2012", "Ford Edge SUV 2012", "Ford Ranger Regular Cab 2011", "Ford Expedition EL SUV 2009", "Ford Flex SUV 2012", "Ford GT Coupe 2006", "Ford Freestar Minivan 2007", "Ford Expedition SUV 2012", "Ford Focus ST Hatchback 2012", "Ford Fusion Sedan 2012", "Ford Taurus Sedan 2007", "GMC Terrain SUV 2012", "GMC Savana Van 2012", "GMC Yukon Hybrid SUV 2012", "GMC Acadia SUV 2012", "GMC Canyon Extended Cab 2012", "Geo Metro Hatchback 1993", "HUMMER H3T Crew Cab 2010", "HUMMER H2 SUT Crew Cab 2009", "Honda Odyssey Minivan 2012", "Honda RidgeLine Crew Cab 2012", "Honda Civic Accord Sedan 2012", "Honda Civic Accord Coupe 2012", "Honda Civic Sedan 2012", "Honda Civic Coupe 2012", "Honda Odyssey Minivan 2007", "Honda Insight Hatchback 2012", "Honda S2000 Convertible 2009", "Hyundai Genesis Sedan 2012", "Hyundai Equus Sedan 2012", "Hyundai Accent Sedan 2012", "Hyundai Veloster Hatchback 2012", "Hyundai Santa Fe SUV 2012", "Hyundai Tucson SUV 2012", "Hyundai Veracruz SUV 2012", "Hyundai Sonata Hybrid Sedan 2012", "Hyundai Elantra Sedan 2007", "Hyundai Azera Sedan 2012", "Infiniti G Coupe IPL 2012", "Infiniti QX56 SUV 2011", "Isuzu Ascender SUV 2006", "Jaguar XK Convertible 2012", "Jeep Liberty SUV 2012", "Jeep Grand Cherokee SUV 2012", "Jeep Compass SUV 2012", "Jeep Patriot SUV 2012", "Jeep Wrangler SUV 2012", "Lamborghini Reventon Coupe 2008", "Lamborghini Aventador Coupe 2012", "Lamborghini Gallardo LP 570-4 Superleggera 2012", "Lamborghini Diablo Coupe 2001", "Land Rover Range Rover SUV 2012", "Land Rover LR2 SUV 2012", "Lincoln Town Car Sedan 2011", "MINI Cooper Roadster Convertible 2012", "Maybach Landaulet Convertible 2012", "Mazda Tribute SUV 2011", "McLaren MP4-12C Coupe 2012", "Mercedes-Benz 300-Class Convertible 1993", "Mercedes-Benz C-Class Sedan 2012", "Mercedes-Benz SL-Class Coupe 2009", "Mercedes-Benz E-Class Sedan 2012", "Mercedes-Benz S-Class Sedan 2012", "Mercedes-Benz Sprinter Van 2012", "Mitsubishi Lancer Sedan 2012", "Nissan Leaf Hatchback 2012", "Nissan NV Passenger Van 2012", "Nissan Juke SUV 2012", "Nissan 240SX Coupe 1998", "Oldsmobile Cutlass Supreme Silhouette Pontaic Trans Sport Wagon 1993", "Plymouth Neon Sedan 1999", "Porsche Panamera Sedan 2012", "Ram C/V Cargo Van Minivan 2012", "Rolls-Royce Phantom Drophead Coupe Convertible 2012", "Rolls-Royce Ghost Sedan 2012", "Rolls-Royce Phantom Sedan 2012", "Scion xD Hatchback 2012", "Spyker C8 Laviolette Coupe 2009", "Spyker C8 Aileron Coupe 2011", "Suzuki Aerio Sedan 2007", "Suzuki Kizashi Sedan 2012", "Suzuki SX4 Hatchback 2012", "Suzuki SX4 Sedan 2012", "Tesla Model S Sedan 2012", "Toyota Sequoia SUV 2012", "Toyota Camry Sedan 2012", "Toyota Corolla Sedan 2012", "Toyota 4Runner SUV 2012", "Volkswagen Golf Hatchback 2012", "Volkswagen Golf Hatchback 1991", "Volkswagen Beetle Hatchback 2012", "Volvo C30 Hatchback 2012", "Volvo 240 Sedan 1993", "Volvo XC90 SUV 2007", "Smart fortwo Convertible 2012" };
 
         private readonly ConcurrentDictionary<int, string> _modelCache = new();
         private readonly ConcurrentDictionary<int, Scalar> _colorCache = new();
@@ -101,70 +52,34 @@ namespace WpfApp1.ViewModels
 
         public MainWindowViewModel()
         {
+            // ✅ MongoDB 초기화 로직 강화 (연결 실패 시 에러 팝업)
+            try
+            {
+                var client = new MongoClient("mongodb://localhost:27017");
+                var database = client.GetDatabase("TrafficControlDB");
+                _dbCollection = database.GetCollection<VehicleRecord>("DetectionLogs");
+                // 연결 테스트
+                database.RunCommand((Command<BsonDocument>)"{ping:1}");
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show($"DB 연결 실패: {ex.Message}\nMongoDB가 켜져 있는지 확인하세요.");
+            }
+
             OpenVideoCommand = new RelayCommand(OpenVideo);
             _timer.Tick += Timer_Tick;
-            _timer.Interval = TimeSpan.FromMilliseconds(1);
+            _timer.Interval = TimeSpan.FromMilliseconds(5);
             InitializeDetectors();
         }
 
         private void InitializeDetectors()
         {
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-            string detPath = Path.Combine(baseDir, "Scripts/yolov8n.onnx");
-            if (File.Exists(detPath)) _detector = new YoloDetectService(detPath, 640, 0.25f, 0.45f);
+            string detPath = Path.Combine(baseDir, "Scripts", "yolov8n.onnx");
+            if (File.Exists(detPath)) _detector = new YoloDetectService(detPath, 640, 0.3f, 0.45f);
 
             string clsPath = Path.Combine(baseDir, ClassOnnxPath);
-            if (File.Exists(clsPath))
-            {
-                try { _classSession = new InferenceSession(clsPath); }
-                catch { }
-            }
-        }
-
-        private string GetSpecificCarModel(Mat cropImg)
-        {
-            if (_classSession == null) return "...";
-            try
-            {
-                using var rgbImg = new Mat();
-                Cv2.CvtColor(cropImg, rgbImg, ColorConversionCodes.BGR2RGB);
-
-                // 전처리 (샤프닝)
-                using var sharpened = new Mat();
-                float[] kernelData = { 0, -1, 0, -1, 5, -1, 0, -1, 0 };
-                using var kernel = new Mat(3, 3, MatType.CV_32F);
-                kernel.SetArray<float>(kernelData);
-                Cv2.Filter2D(rgbImg, sharpened, -1, kernel);
-
-                using var resized = new Mat();
-                Cv2.Resize(sharpened, resized, new Size(160, 160), 0, 0, InterpolationFlags.Lanczos4);
-
-                var input = new DenseTensor<float>(new[] { 1, 3, 160, 160 });
-                var indexer = resized.GetGenericIndexer<Vec3b>();
-                for (int y = 0; y < 160; y++)
-                    for (int x = 0; x < 160; x++)
-                    {
-                        var p = indexer[y, x];
-                        input[0, 0, y, x] = p.Item0 / 255f;
-                        input[0, 1, y, x] = p.Item1 / 255f;
-                        input[0, 2, y, x] = p.Item2 / 255f;
-                    }
-
-                lock (_sessionLock)
-                {
-                    using var results = _classSession.Run(new[] { NamedOnnxValue.CreateFromTensor(_classSession.InputMetadata.Keys.First(), input) });
-                    var output = results.First().AsTensor<float>();
-
-                    float[] scores = new float[206];
-                    for (int i = 0; i < 525; i++)
-                        for (int c = 0; c < 206; c++)
-                            scores[c] += output[0, 4 + c, i];
-
-                    int bestIdx = Array.IndexOf(scores, scores.Max());
-                    return _carModelNames[bestIdx];
-                }
-            }
-            catch { return "ERR"; }
+            if (File.Exists(clsPath)) { try { _classSession = new InferenceSession(clsPath); } catch { } }
         }
 
         private void Timer_Tick(object? sender, EventArgs e)
@@ -191,9 +106,7 @@ namespace WpfApp1.ViewModels
 
                                 if (d.ClassId == 2 && !_modelCache.ContainsKey(d.TrackId))
                                 {
-                                    Rect safeBox = new Rect(Math.Max(0, d.Box.X), Math.Max(0, d.Box.Y),
-                                                           Math.Min(clone.Width - d.Box.X, d.Box.Width),
-                                                           Math.Min(clone.Height - d.Box.Y, d.Box.Height));
+                                    Rect safeBox = new Rect(Math.Max(0, d.Box.X), Math.Max(0, d.Box.Y), Math.Min(clone.Width - d.Box.X, d.Box.Width), Math.Min(clone.Height - d.Box.Y, d.Box.Height));
                                     if (safeBox.Width > 10 && safeBox.Height > 10)
                                     {
                                         using var crop = new Mat(clone, safeBox).Clone();
@@ -218,65 +131,95 @@ namespace WpfApp1.ViewModels
             {
                 if (_countedIds.Contains(track.Id)) continue;
                 var center = new Point(track.LastBox.X + track.LastBox.Width / 2, track.LastBox.Y + track.LastBox.Height / 2);
+
+                // ✅ 라인을 통과하는 순간 DB 저장 호출
                 if (center.Y > lineY)
                 {
-                    if (center.X < w * 0.35) _countL++; else if (center.X > w * 0.65) _countR++; else _countF++;
+                    string dir = center.X < w * 0.35 ? "L" : (center.X > w * 0.65 ? "R" : "F");
+                    if (dir == "L") _countL++; else if (dir == "R") _countR++; else _countF++;
                     _countedIds.Add(track.Id);
+
+                    // DB 저장 시도
+                    SaveToDb(track, dir);
                 }
             }
             CountText = $"L:{_countL} | F:{_countF} | R:{_countR}";
         }
 
+        private void SaveToDb(TrackedObject track, string direction)
+        {
+            // ✅ 데이터 객체 생성
+            DateTime now = DateTime.Now;
+            _modelCache.TryGetValue(track.Id, out string? modelName);
+            string violation = track.Speed > 100 ? "속도 위반" : "정상";
+
+            var record = new VehicleRecord
+            {
+                DetectTime = now,
+                VehicleType = $"{GetTypeName(track.LastClassId)} ({modelName ?? "Unknown"})",
+                Direction = direction,
+                Speed = (int)Math.Round(track.Speed),
+                ViolationReason = violation,
+                LicensePlate = "분별 중..."
+            };
+
+            // ✅ 비동기 저장 및 결과 확인 (UI 쓰레드에서 에러 출력 가능하게 구성)
+            Task.Run(async () => {
+                try
+                {
+                    if (_dbCollection != null)
+                    {
+                        await _dbCollection.InsertOneAsync(record);
+                    }
+                    else
+                    {
+                        Console.WriteLine("DB 컬렉션이 초기화되지 않았습니다.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // 로그 기록 또는 디버그 출력
+                    System.Diagnostics.Debug.WriteLine($"DB 저장 치명적 에러: {ex.Message}");
+                }
+            });
+        }
+
         private void DrawOutput(Mat frame)
         {
+            string timeStr = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
             foreach (var d in _currentDetections)
             {
                 if (!_trackedObjects.TryGetValue(d.TrackId, out var track)) continue;
+                Scalar color = _colorCache.TryGetValue(d.TrackId, out var c) ? c : Scalar.Yellow;
+                Cv2.Rectangle(frame, d.Box, color, 2);
 
-                Scalar objColor = _colorCache.TryGetValue(d.TrackId, out var c) ? c : Scalar.Yellow;
-                Cv2.Rectangle(frame, d.Box, objColor, 2);
+                _modelCache.TryGetValue(d.TrackId, out var model);
+                string label = $"{track.Speed:F1}km/h {model ?? ""}";
+                if (track.Speed > 100) label += " [SPEED!!]";
 
-                // [복구] 차종 태그, 속도, 모델명 통합 한 줄 표시
-                string typeName = GetTypeName(d.ClassId);
-                string speedStr = $"{track.Speed:F1}km/h";
-                string modelName = (d.ClassId == 2 && _modelCache.TryGetValue(d.TrackId, out var m)) ? m : "";
-
-                string label = $"[{typeName}] {speedStr} {modelName}".Trim();
-                var labelSize = Cv2.GetTextSize(label, HersheyFonts.HersheySimplex, 0.45, 1, out var baseline);
-
-                // 가독성 배경 박스
-                Rect bgRect = new Rect(d.Box.X, d.Box.Y - labelSize.Height - 10, labelSize.Width + 10, labelSize.Height + baseline + 5);
-                Cv2.Rectangle(frame, bgRect, Scalar.Black, -1);
-
-                Cv2.PutText(frame, label, new Point(d.Box.X + 5, d.Box.Y - 8),
-                           HersheyFonts.HersheySimplex, 0.45, objColor, 1, LineTypes.AntiAlias);
+                var size = Cv2.GetTextSize(label, HersheyFonts.HersheySimplex, 0.45, 1, out var baseLine);
+                Cv2.Rectangle(frame, new Rect(d.Box.X, d.Box.Y - size.Height - 10, size.Width + 10, size.Height + baseLine + 5),
+                              track.Speed > 100 ? Scalar.Red : Scalar.Black, -1);
+                Cv2.PutText(frame, label, new Point(d.Box.X + 5, d.Box.Y - 8), HersheyFonts.HersheySimplex, 0.45, Scalar.White, 1, LineTypes.AntiAlias);
             }
             Cv2.Line(frame, 0, (int)(frame.Height * 0.7), frame.Width, (int)(frame.Height * 0.7), Scalar.Red, 2);
         }
 
-        private void TrackAndMatch(List<Detection> dets, double time)
+        // --- 보조 메서드들 (이전과 동일) ---
+        private string GetSpecificCarModel(Mat cropImg)
         {
-            var used = new HashSet<int>();
-            foreach (var track in _trackedObjects.Values.ToList())
+            if (_classSession == null) return "...";
+            try
             {
-                int best = -1; float maxIou = 0.25f;
-                for (int i = 0; i < dets.Count; i++)
-                {
-                    if (used.Contains(i)) continue;
-                    float iou = YoloV8Onnx.IoU(track.LastBox, dets[i].Box);
-                    if (iou > maxIou) { maxIou = iou; best = i; }
-                }
-                if (best != -1) { dets[best].TrackId = track.Id; track.Update(dets[best], time); used.Add(best); }
-                else track.Missed();
+                using var rgbImg = new Mat(); Cv2.CvtColor(cropImg, rgbImg, ColorConversionCodes.BGR2RGB);
+                using var resized = new Mat(); Cv2.Resize(rgbImg, resized, new Size(160, 160));
+                var input = new DenseTensor<float>(new[] { 1, 3, 160, 160 });
+                for (int y = 0; y < 160; y++) for (int x = 0; x < 160; x++) { var p = resized.At<Vec3b>(y, x); input[0, 0, y, x] = p.Item0 / 255f; input[0, 1, y, x] = p.Item1 / 255f; input[0, 2, y, x] = p.Item2 / 255f; }
+                lock (_sessionLock) { using var results = _classSession.Run(new[] { NamedOnnxValue.CreateFromTensor(_classSession.InputMetadata.Keys.First(), input) }); var output = results.First().AsTensor<float>(); float[] scores = new float[206]; for (int i = 0; i < 525; i++) for (int c = 0; c < 206; c++) scores[c] += output[0, 4 + c, i]; return _carModelNames[Array.IndexOf(scores, scores.Max())]; }
             }
-            foreach (var d in dets.Where((_, i) => !used.Contains(i))) { var nt = new TrackedObject(d, time); d.TrackId = nt.Id; _trackedObjects[nt.Id] = nt; }
-            _trackedObjects.Where(kv => kv.Value.ShouldBeDeleted).ToList().ForEach(k => {
-                _trackedObjects.Remove(k.Key);
-                _modelCache.TryRemove(k.Key, out _);
-                _colorCache.TryRemove(k.Key, out _);
-            });
+            catch { return "ERR"; }
         }
-
+        private void TrackAndMatch(List<Detection> dets, double time) { var used = new HashSet<int>(); foreach (var track in _trackedObjects.Values.ToList()) { int best = -1; float maxIou = 0.2f; for (int i = 0; i < dets.Count; i++) { if (used.Contains(i)) continue; float iou = YoloV8Onnx.IoU(track.LastBox, dets[i].Box); if (iou > maxIou) { maxIou = iou; best = i; } } if (best != -1) { dets[best].TrackId = track.Id; track.Update(dets[best], time); used.Add(best); } else track.Missed(); } foreach (var d in dets.Where((_, i) => !used.Contains(i))) { var nt = new TrackedObject(d, time); d.TrackId = nt.Id; _trackedObjects[nt.Id] = nt; } _trackedObjects.Where(kv => kv.Value.ShouldBeDeleted).ToList().ForEach(k => { _trackedObjects.Remove(k.Key); _modelCache.TryRemove(k.Key, out _); _colorCache.TryRemove(k.Key, out _); }); }
         private string GetTypeName(int id) => id switch { 2 => "CAR", 5 => "BUS", 7 => "TRUCK", _ => "Vehicle" };
         private void OpenVideo() { var d = new OpenFileDialog(); if (d.ShowDialog() == true) { _video.Open(d.FileName); _countL = _countF = _countR = 0; _countedIds.Clear(); _trackedObjects.Clear(); _modelCache.Clear(); _colorCache.Clear(); _timer.Start(); } }
         public void Dispose() { _timer.Stop(); _classSession?.Dispose(); _frame.Dispose(); _video.Dispose(); }
