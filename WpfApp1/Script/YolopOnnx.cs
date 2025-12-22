@@ -52,20 +52,21 @@ namespace WpfApp1.Script
                 var driveT = results.First(r => r.Name.Contains("drive", StringComparison.OrdinalIgnoreCase)).AsTensor<float>();
                 var laneT = results.First(r => r.Name.Contains("lane", StringComparison.OrdinalIgnoreCase)).AsTensor<float>();
 
-                // 1) Detection (우리는 지금 차량검출에 YOLOP det를 사용 안 하지만, 안전하게 반환은 해둠)
+                // 1) Detection
                 var dets = ParseDetOut(detT, bgr.Width, bgr.Height, scale, padX, padY, _confThres);
                 dets = NmsByClass(dets, _nmsThres);
 
-                // 2) Drive mask (argmax -> class=1)
-                using var driveMask640 = SegToBinaryMask(driveT, thrProb: 0.5f); // CV_8UC1 0/255
+                // 2) Drive prob/map -> mask
+                using var driveProb640 = SegToProbMapAuto(driveT); // CV_32FC1
+                using var driveMask640 = ProbToBinaryMask(driveProb640, thr: 0.50f);
                 var driveOrig = UnLetterboxMaskToOriginal(driveMask640, bgr.Width, bgr.Height, scale, padX, padY);
 
-                // 3) Lane prob map (softmax prob of class=1)
-                using var laneProb640 = SegToProbMap(laneT); // CV_32FC1 0~1
+                // 3) Lane prob map
+                using var laneProb640 = SegToProbMapAuto(laneT);   // CV_32FC1
                 var laneProbOrig = UnLetterboxProbToOriginal(laneProb640, bgr.Width, bgr.Height, scale, padX, padY);
 
-                // 4) Lane mask (prob -> threshold)
-                var laneOrig = ProbToBinaryMask(laneProbOrig, thr: 0.50f); // 기본값(표시용)
+                // 4) Lane mask(표시용)
+                var laneOrig = ProbToBinaryMask(laneProbOrig, thr: 0.50f);
 
                 return new YolopResult(dets, driveOrig, laneOrig, laneProbOrig);
             }
@@ -131,11 +132,9 @@ namespace WpfApp1.Script
         // =========================
         private static List<Detection> ParseDetOut(Tensor<float> det, int origW, int origH, float scale, int padX, int padY, float confThres)
         {
-            // det: [1,25200,6]
             int n = det.Dimensions[1];
             var list = new List<Detection>(128);
 
-            // 값이 0~1로 나오는 모델도 있어서 자동 보정
             float maxCoord = 0f;
             for (int i = 0; i < Math.Min(n, 200); i++)
                 maxCoord = Math.Max(maxCoord, Math.Max(det[0, i, 2], det[0, i, 3]));
@@ -158,7 +157,6 @@ namespace WpfApp1.Script
                     x1 *= 640f; y1 *= 640f; x2 *= 640f; y2 *= 640f;
                 }
 
-                // unletterbox: (x - pad)/scale
                 x1 = (x1 - padX) / scale;
                 y1 = (y1 - padY) / scale;
                 x2 = (x2 - padX) / scale;
@@ -221,16 +219,52 @@ namespace WpfApp1.Script
         }
 
         // =========================
-        // Postprocess: Segmentation
+        // Postprocess: Segmentation (AUTO)
         // =========================
-        private static Mat SegToProbMap(Tensor<float> seg)
+        private static Mat SegToProbMapAuto(Tensor<float> seg)
         {
-            // seg: [1,2,H,W] logits -> softmax prob(class=1)
+            // seg: [1,2,H,W]
             int h = seg.Dimensions[2];
             int w = seg.Dimensions[3];
 
+            // 샘플링으로 “이미 prob인지(logits인지)” 판별
+            // - prob면 보통 0~1 범위
+            // - logits면 -수~+수로 넓음
+            float minV = float.MaxValue;
+            float maxV = float.MinValue;
+            int step = 16;
+
+            for (int y = 0; y < h; y += step)
+            {
+                for (int x = 0; x < w; x += step)
+                {
+                    float a = seg[0, 0, y, x];
+                    float b = seg[0, 1, y, x];
+                    minV = Math.Min(minV, Math.Min(a, b));
+                    maxV = Math.Max(maxV, Math.Max(a, b));
+                }
+            }
+
+            bool looksLikeProb = (minV >= -0.05f && maxV <= 1.05f);
+
             var prob = new Mat(h, w, MatType.CV_32FC1);
 
+            if (looksLikeProb)
+            {
+                // 이미 확률로 들어온 모델: class=1 채널 그대로 사용
+                for (int y = 0; y < h; y++)
+                {
+                    for (int x = 0; x < w; x++)
+                    {
+                        float p1 = seg[0, 1, y, x];
+                        p1 = Math.Clamp(p1, 0f, 1f);
+                        prob.Set(y, x, p1);
+                    }
+                }
+                return prob;
+            }
+
+            // logits로 판단 → softmax
             for (int y = 0; y < h; y++)
             {
                 for (int x = 0; x < w; x++)
@@ -250,16 +284,8 @@ namespace WpfApp1.Script
             return prob;
         }
 
-        private static Mat SegToBinaryMask(Tensor<float> seg, float thrProb = 0.5f)
-        {
-            // drive/lane logits -> prob -> threshold -> mask
-            using var prob = SegToProbMap(seg);
-            return ProbToBinaryMask(prob, thrProb);
-        }
-
         private static Mat ProbToBinaryMask(Mat prob, float thr)
         {
-            // prob: CV_32FC1 (0~1) -> CV_8UC1 0/255
             var mask = new Mat(prob.Rows, prob.Cols, MatType.CV_8UC1);
             for (int y = 0; y < prob.Rows; y++)
             {
