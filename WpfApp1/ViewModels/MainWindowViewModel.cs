@@ -1,7 +1,7 @@
 // MainWindowViewModel.cs (FULL REPLACEMENT)
 // - YOLOv8 detect + YOLOP lane + Speed/DB + CarModel(best.onnx) classification integrated
 // - Car model classification runs ONCE per track (async queue worker) to prevent freezing
-// - Label style: line1 = "xx.xkm/h Acura RL Sedan 2012", line2 = "Car | Lane:4"
+// - Label style: line1 = "xx.xkm/h Honda Ridgeline Crew Cab 2012", line2 = "Car | Lane:4"
 
 using Microsoft.Win32;
 using MongoDB.Driver;
@@ -39,14 +39,216 @@ namespace WpfApp1.ViewModels
 
         // ✅ car model classifier (best.onnx)
         private const string CarModelOnnxPath = "Scripts/best.onnx";
-        // labels file (여러 이름 후보 지원)
-        private static readonly string[] CarModelLabelFileCandidates =
+
+        // ✅ 파일 없이 MainWindowViewModel.cs에 내장 (너가 넣은 리스트 사용)
+        // best.onnx가 "차종 분류 모델"이면 보통 196(Stanford Cars)개 클래스가 맞아야 함.
+        // 그런데 네 출력이 [1x210x525]처럼 나오면 YOLO 출력이므로, 아래 디코딩 루틴이 필요함.
+        private static readonly string[] CarModelNamesEmbedded = new[]
         {
-            "Scripts/car_model_names.txt",
-            "Scripts/carmodel_names.txt",
-            "Scripts/car_models.txt",
-            "Scripts/labels.txt",
-            "Scripts/classes.txt"
+            "AM General Hummer SUV 2000",
+            "Acura RL Sedan 2012",
+            "Acura TL Sedan 2012",
+            "Acura TL Type-S 2008",
+            "Acura TSX Sedan 2012",
+            "Acura Integra Type R 2001",
+            "Acura ZDX Hatchback 2012",
+            "Aston Martin V8 Vantage Convertible 2012",
+            "Aston Martin V8 Vantage Coupe 2012",
+            "Aston Martin Virage Convertible 2012",
+            "Aston Martin Virage Coupe 2012",
+            "Audi RS 4 Convertible 2008",
+            "Audi A5 Coupe 2012",
+            "Audi TTS Coupe 2012",
+            "Audi R8 Coupe 2012",
+            "Audi V8 Sedan 1994",
+            "Audi 100 Sedan 1994",
+            "Audi 100 Wagon 1994",
+            "Audi TT Hatchback 2011",
+            "Audi S6 Sedan 2011",
+            "Audi S5 Convertible 2012",
+            "Audi S5 Coupe 2012",
+            "Audi S4 Sedan 2012",
+            "Audi S4 Sedan 2007",
+            "Audi TT RS Coupe 2012",
+            "BMW ActiveHybrid 5 Sedan 2012",
+            "BMW 1 Series Convertible 2012",
+            "BMW 1 Series Coupe 2012",
+            "BMW 3 Series Sedan 2012",
+            "BMW 3 Series Wagon 2012",
+            "BMW 6 Series Convertible 2007",
+            "BMW X5 SUV 2007",
+            "BMW X6 SUV 2012",
+            "BMW M3 Coupe 2012",
+            "BMW M5 Sedan 2010",
+            "BMW M6 Convertible 2010",
+            "BMW X3 SUV 2012",
+            "BMW Z4 Convertible 2012",
+            "Bentley Continental Supersports Conv. Convertible 2012",
+            "Bentley Arnage Sedan 2009",
+            "Bentley Mulsanne Sedan 2011",
+            "Bentley Continental GT Coupe 2012",
+            "Bentley Continental GT Coupe 2007",
+            "Bentley Continental Flying Spur Sedan 2007",
+            "Bugatti Veyron 16.4 Convertible 2009",
+            "Bugatti Veyron 16.4 Coupe 2009",
+            "Buick Regal GS 2012",
+            "Buick Rainier SUV 2007",
+            "Buick Verano Sedan 2012",
+            "Buick Enclave SUV 2012",
+            "Cadillac CTS-V Sedan 2012",
+            "Cadillac SRX SUV 2012",
+            "Cadillac Escalade EXT Crew Cab 2007",
+            "Chevrolet Silverado 1500 Hybrid Crew Cab 2012",
+            "Chevrolet Corvette Convertible 2012",
+            "Chevrolet Corvette ZR1 2012",
+            "Chevrolet Corvette Ron Fellows Edition Z06 2007",
+            "Chevrolet Traverse SUV 2012",
+            "Chevrolet Camaro Convertible 2012",
+            "Chevrolet HHR SS 2010",
+            "Chevrolet Impala Sedan 2007",
+            "Chevrolet Tahoe Hybrid SUV 2012",
+            "Chevrolet Sonic Sedan 2012",
+            "Chevrolet Express Cargo Van 2007",
+            "Chevrolet Avalanche Crew Cab 2012",
+            "Chevrolet Cobalt SS 2010",
+            "Chevrolet Malibu Hybrid Sedan 2010",
+            "Chevrolet TrailBlazer SS 2009",
+            "Chevrolet Silverado 2500HD Regular Cab 2012",
+            "Chevrolet Silverado 1500 Classic Extended Cab 2007",
+            "Chevrolet Express Van 2007",
+            "Chevrolet Monte Carlo Coupe 2007",
+            "Chevrolet Malibu Sedan 2007",
+            "Chevrolet Silverado 1500 Extended Cab 2012",
+            "Chevrolet Silverado 1500 Regular Cab 2012",
+            "Chrysler Aspen SUV 2009",
+            "Chrysler Sebring Convertible 2010",
+            "Chrysler Town and Country Minivan 2012",
+            "Chrysler 300 SRT-8 2010",
+            "Chrysler Crossfire Convertible 2008",
+            "Chrysler PT Cruiser Convertible 2008",
+            "Daewoo Nubira Wagon 2002",
+            "Dodge Caliber Wagon 2012",
+            "Dodge Caliber Wagon 2007",
+            "Dodge Caravan Minivan 2007",
+            "Dodge Ram SRT-10 2004",
+            "Dodge Neon SRT-4 2003",
+            "Dodge Durango SUV 2012",
+            "Dodge Durango SUV 2007",
+            "Dodge Journey SUV 2012",
+            "Dodge Dakota Crew Cab 2010",
+            "Dodge Dakota Club Cab 2010",
+            "Dodge Magnum Wagon 2008",
+            "Dodge Challenger Coupe 2011",
+            "Dodge Charger Sedan 2012",
+            "Dodge Charger SRT-8 2009",
+            "Eagle Talon Hatchback 1998",
+            "FIAT 500 Abarth 2012",
+            "FIAT 500 Convertible 2012",
+            "Ferrari FF Coupe 2012",
+            "Ferrari California Convertible 2012",
+            "Ferrari 458 Italia Convertible 2012",
+            "Ferrari 458 Italia Coupe 2012",
+            "Fisker Karma Sedan 2012",
+            "Ford F-450 Super Duty Crew Cab 2012",
+            "Ford Mustang Convertible 2007",
+            "Ford Fiesta Sedan 2012",
+            "Ford Ranger SuperCab 2011",
+            "Ford F-150 Regular Cab 2012",
+            "Ford F-150 Regular Cab 2007",
+            "Ford Focus Sedan 2007",
+            "Ford E-Series Wagon 2012",
+            "Ford Edge SUV 2012",
+            "Ford Ranger Regular Cab 2011",
+            "Ford Expedition EL SUV 2009",
+            "Ford Flex SUV 2012",
+            "Ford GT Coupe 2006",
+            "Ford Freestar Minivan 2007",
+            "Ford Expedition SUV 2012",
+            "Ford Focus ST Hatchback 2012",
+            "Ford Fusion Sedan 2012",
+            "Ford Taurus Sedan 2007",
+            "GMC Terrain SUV 2012",
+            "GMC Savana Van 2012",
+            "GMC Yukon Hybrid SUV 2012",
+            "GMC Acadia SUV 2012",
+            "GMC Canyon Extended Cab 2012",
+            "Geo Metro Hatchback 1993",
+            "HUMMER H3T Crew Cab 2010",
+            "HUMMER H2 SUT Crew Cab 2009",
+            "Honda Odyssey Minivan 2012",
+            "Honda RidgeLine Crew Cab 2012",
+            "Honda Civic Sedan 2012",
+            "Honda Civic Coupe 2012",
+            "Honda Odyssey Minivan 2007",
+            "Honda Insight Hatchback 2012",
+            "Honda S2000 Convertible 2009",
+            "Hyundai Genesis Sedan 2012",
+            "Hyundai Equus Sedan 2012",
+            "Hyundai Accent Sedan 2012",
+            "Hyundai Veloster Hatchback 2012",
+            "Hyundai Santa Fe SUV 2012",
+            "Hyundai Tucson SUV 2012",
+            "Hyundai Veracruz SUV 2012",
+            "Hyundai Sonata Hybrid Sedan 2012",
+            "Hyundai Elantra Sedan 2007",
+            "Hyundai Azera Sedan 2012",
+            "Infiniti G Coupe IPL 2012",
+            "Infiniti QX56 SUV 2011",
+            "Isuzu Ascender SUV 2006",
+            "Jaguar XK Convertible 2012",
+            "Jeep Liberty SUV 2012",
+            "Jeep Grand Cherokee SUV 2012",
+            "Jeep Compass SUV 2012",
+            "Jeep Patriot SUV 2012",
+            "Jeep Wrangler SUV 2012",
+            "Lamborghini Reventon Coupe 2008",
+            "Lamborghini Aventador Coupe 2012",
+            "Lamborghini Gallardo LP 570-4 Superleggera 2012",
+            "Lamborghini Diablo Coupe 2001",
+            "Land Rover Range Rover SUV 2012",
+            "Land Rover LR2 SUV 2012",
+            "Lincoln Town Car Sedan 2011",
+            "MINI Cooper Roadster Convertible 2012",
+            "Maybach Landaulet Convertible 2012",
+            "Mazda Tribute SUV 2011",
+            "McLaren MP4-12C Coupe 2012",
+            "Mercedes-Benz 300-Class Convertible 1993",
+            "Mercedes-Benz C-Class Sedan 2012",
+            "Mercedes-Benz SL-Class Coupe 2009",
+            "Mercedes-Benz E-Class Sedan 2012",
+            "Mercedes-Benz S-Class Sedan 2012",
+            "Mercedes-Benz Sprinter Van 2012",
+            "Mitsubishi Lancer Sedan 2012",
+            "Nissan Leaf Hatchback 2012",
+            "Nissan NV Passenger Van 2012",
+            "Nissan Juke SUV 2012",
+            "Nissan 240SX Coupe 1998",
+            "Oldsmobile Cutlass Supreme Silhouette Pontaic Trans Sport Wagon 1993",
+            "Plymouth Neon Sedan 1999",
+            "Porsche Panamera Sedan 2012",
+            "Ram C/V Cargo Van Minivan 2012",
+            "Rolls-Royce Phantom Drophead Coupe Convertible 2012",
+            "Rolls-Royce Ghost Sedan 2012",
+            "Rolls-Royce Phantom Sedan 2012",
+            "Scion xD Hatchback 2012",
+            "Spyker C8 Laviolette Coupe 2009",
+            "Spyker C8 Aileron Coupe 2011",
+            "Suzuki Aerio Sedan 2007",
+            "Suzuki Kizashi Sedan 2012",
+            "Suzuki SX4 Hatchback 2012",
+            "Suzuki SX4 Sedan 2012",
+            "Tesla Model S Sedan 2012",
+            "Toyota Sequoia SUV 2012",
+            "Toyota Camry Sedan 2012",
+            "Toyota Corolla Sedan 2012",
+            "Toyota 4Runner SUV 2012",
+            "Volkswagen Golf Hatchback 2012",
+            "Volkswagen Golf Hatchback 1991",
+            "Volkswagen Beetle Hatchback 2012",
+            "Volvo C30 Hatchback 2012",
+            "Volvo 240 Sedan 1993",
+            "Volvo XC90 SUV 2007",
+            "Smart fortwo Convertible 2012"
         };
 
         private readonly VideoPlayerService _video = new();
@@ -86,7 +288,7 @@ namespace WpfApp1.ViewModels
         private readonly int _laneInferIntervalMs = 200;
         private long _lastLaneInferMs = 0;
 
-        // ✅ LaneAnalyzer result (backup point)
+        // ✅ LaneAnalyzer result
         private LaneAnalyzer.LaneAnalysisResult? _laneAnalysisStable;
 
         private class LaneStableState
@@ -177,19 +379,15 @@ namespace WpfApp1.ViewModels
         private readonly object _classLock = new();
         private string[] _carModelNames = Array.Empty<string>();
 
-        // trackId -> modelName 상태
         private class ModelState
         {
             public bool Requested;
             public string Name = "";
         }
         private readonly ConcurrentDictionary<int, ModelState> _modelStates = new();
-
-        // crop job
         private readonly ConcurrentQueue<(int trackId, Mat crop)> _modelQueue = new();
         private CancellationTokenSource? _modelCts;
 
-        // status once-print
         private readonly object _statusOnceLock = new();
         private bool _classInfoPrinted = false;
 
@@ -244,10 +442,7 @@ namespace WpfApp1.ViewModels
             InitializeYolop();
             InitializeCarClassifier();   // ✅ best.onnx
 
-            // ✅ DB 워커 시작
             StartDbWorker();
-
-            // ✅ 모델 분류 워커 시작
             StartModelWorker();
         }
 
@@ -294,12 +489,10 @@ namespace WpfApp1.ViewModels
                     return;
                 }
 
-                // labels 로드(있으면 모델명 출력, 없으면 Model#idx로라도 출력)
-                _carModelNames = LoadCarModelNames();
-
                 var opts = new SessionOptions();
-                // CPU로 안정 운영 (GPU 쓰려면 여기 변경)
                 _classSession = new InferenceSession(onnxPath, opts);
+
+                _carModelNames = CarModelNamesEmbedded;
 
                 PrintClassifierInfoOnce();
             }
@@ -308,27 +501,6 @@ namespace WpfApp1.ViewModels
                 _classSession = null;
                 SafeSetStatus($"best.onnx 로드 실패: {ex.Message}");
             }
-        }
-
-        private string[] LoadCarModelNames()
-        {
-            try
-            {
-                foreach (var rel in CarModelLabelFileCandidates)
-                {
-                    var p = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, rel);
-                    if (!File.Exists(p)) continue;
-
-                    var lines = File.ReadAllLines(p)
-                        .Select(s => s.Trim())
-                        .Where(s => !string.IsNullOrWhiteSpace(s))
-                        .ToArray();
-
-                    if (lines.Length > 0) return lines;
-                }
-            }
-            catch { }
-            return Array.Empty<string>();
         }
 
         private void PrintClassifierInfoOnce()
@@ -350,14 +522,14 @@ namespace WpfApp1.ViewModels
                 var inName = _classSession.InputMetadata.Keys.First();
                 var inMeta = _classSession.InputMetadata[inName];
                 var inDims = string.Join("x", inMeta.Dimensions.Select(d => d.ToString()));
-                var inType = inMeta.ElementType?.ToString() ?? "unknown";
+                var inType = inMeta.ElementType.ToString();
 
                 var outName = _classSession.OutputMetadata.Keys.First();
                 var outMeta = _classSession.OutputMetadata[outName];
                 var outDims = string.Join("x", outMeta.Dimensions.Select(d => d.ToString()));
-                var outType = outMeta.ElementType?.ToString() ?? "unknown";
+                var outType = outMeta.ElementType.ToString();
 
-                SafeSetStatus($"best.onnx OK | IN:{inName}[{inDims}] {inType} | OUT:{outName}[{outDims}] {outType}");
+                SafeSetStatus($"best.onnx OK | IN:{inName}[{inDims}] {inType} | OUT:{outName}[{outDims}] {outType} | labels:{_carModelNames.Length}");
             }
             catch (Exception ex)
             {
@@ -499,11 +671,8 @@ namespace WpfApp1.ViewModels
                     track.Update(detections[bestIdx], timeMsec);
 
                     UpdateSpeedAndDirection(track);
-
-                    // ✅ DB는 큐에 넣기만
                     TryInsertRecord(detections[bestIdx], track);
 
-                    // ✅ 모델 분류는 트랙당 1회만 비동기 큐로 요청
                     TryEnqueueModelJob(track.Id, detections[bestIdx].Box, frameForCrop);
 
                     usedDets.Add(bestIdx);
@@ -517,7 +686,6 @@ namespace WpfApp1.ViewModels
                 d.TrackId = newTrack.Id;
                 _trackedObjects[newTrack.Id] = newTrack;
 
-                // 신규 트랙도 분류 요청
                 TryEnqueueModelJob(newTrack.Id, d.Box, frameForCrop);
             }
 
@@ -532,7 +700,6 @@ namespace WpfApp1.ViewModels
                 _laneStates.Remove(id);
                 _countedIds.Remove(id);
 
-                // 모델 상태도 정리
                 _modelStates.TryRemove(id, out _);
             }
         }
@@ -541,14 +708,11 @@ namespace WpfApp1.ViewModels
         {
             if (_classSession == null) return;
 
-            // 이미 요청됨이면 스킵
             var st = _modelStates.GetOrAdd(trackId, _ => new ModelState());
             if (st.Requested) return;
 
-            // 너무 작으면 스킵
             if (box.Width < 30 || box.Height < 30) return;
 
-            // 안전 Rect로 클램프
             int x = Math.Max(0, box.X);
             int y = Math.Max(0, box.Y);
             int w = Math.Min(box.Width, frameForCrop.Width - x);
@@ -557,7 +721,6 @@ namespace WpfApp1.ViewModels
 
             var safe = new CvRect(x, y, w, h);
 
-            // crop은 Clone해서 워커로 넘김 (원본 Mat dispose 영향 제거)
             Mat crop;
             try
             {
@@ -572,7 +735,6 @@ namespace WpfApp1.ViewModels
             st.Requested = true;
             _modelQueue.Enqueue((trackId, crop));
 
-            // 큐 폭주 방지(최대 200개)
             while (_modelQueue.Count > 200 && _modelQueue.TryDequeue(out var old))
             {
                 try { old.crop.Dispose(); } catch { }
@@ -656,7 +818,6 @@ namespace WpfApp1.ViewModels
             return st.StableLane;
         }
 
-        // ✅ 2번 프로젝트 스타일: 배경 박스 + 텍스트
         private static void DrawLabelBox(Mat frame, string text, int x, int y, double scale, Scalar bg, Scalar fg)
         {
             var size = Cv2.GetTextSize(text, HersheyFonts.HersheySimplex, scale, 1, out int baseLine);
@@ -714,7 +875,6 @@ namespace WpfApp1.ViewModels
             {
                 if (!_trackedObjects.TryGetValue(d.TrackId, out var track)) continue;
 
-                // 속도 표시(기존 로직 유지)
                 double kmh = track.RelativeSpeed * 8.5;
                 if (kmh > 130) kmh = 110;
 
@@ -732,15 +892,11 @@ namespace WpfApp1.ViewModels
 
                 Cv2.Rectangle(frame, d.Box, Scalar.Yellow, 2);
 
-                // ✅ 모델명은 modelStates에서 꺼낸다(없으면 빈칸)
                 string modelName = "";
                 if (_modelStates.TryGetValue(d.TrackId, out var ms) && !string.IsNullOrWhiteSpace(ms.Name))
                     modelName = ms.Name;
 
-                // 1줄: 속도 + 모델명
                 string line1 = $"{kmh:0.0}km/h {modelName}".Trim();
-
-                // 2줄: Car/Bus/Truck + Lane
                 string typeText = GetTypeName(d.ClassId);
                 string laneText = (stableLane > 0) ? $"Lane:{stableLane}" : "Lane:?";
                 string line2 = $"{typeText} | {laneText}";
@@ -781,7 +937,6 @@ namespace WpfApp1.ViewModels
                     _trackedObjects.Clear();
                     _laneStates.Clear();
 
-                    // 모델 분류 상태 초기화
                     _modelStates.Clear();
                     while (_modelQueue.TryDequeue(out var job))
                     {
@@ -931,19 +1086,18 @@ namespace WpfApp1.ViewModels
             }, token);
         }
 
+        // ---------- 핵심: best.onnx 출력 형태(분류/YOLO)를 둘 다 처리 ----------
         private string GetSpecificCarModel(Mat cropImg)
         {
+            if (_classSession == null) return "";
+
             try
             {
-                if (_classSession == null) return "";
-
                 // 입력 메타(보통 1x3x160x160)
                 var inputName = _classSession.InputMetadata.Keys.First();
                 var dims = _classSession.InputMetadata[inputName].Dimensions.ToArray();
-                if (dims.Length < 4) return "";
-
-                int H = (dims[2] > 0) ? dims[2] : 160;
-                int W = (dims[3] > 0) ? dims[3] : 160;
+                int H = (dims.Length >= 4 && dims[2] > 0) ? dims[2] : 160;
+                int W = (dims.Length >= 4 && dims[3] > 0) ? dims[3] : 160;
 
                 using var rgbImg = new Mat();
                 Cv2.CvtColor(cropImg, rgbImg, ColorConversionCodes.BGR2RGB);
@@ -952,12 +1106,11 @@ namespace WpfApp1.ViewModels
                 Cv2.Resize(rgbImg, resized, new CvSize(W, H));
 
                 var input = new DenseTensor<float>(new[] { 1, 3, H, W });
-
                 for (int y = 0; y < H; y++)
                 {
                     for (int x = 0; x < W; x++)
                     {
-                        var p = resized.At<Vec3b>(y, x); // RGB
+                        var p = resized.At<Vec3b>(y, x);
                         input[0, 0, y, x] = p.Item0 / 255f;
                         input[0, 1, y, x] = p.Item1 / 255f;
                         input[0, 2, y, x] = p.Item2 / 255f;
@@ -972,49 +1125,130 @@ namespace WpfApp1.ViewModels
                     });
 
                     var first = results.First();
-
-                    // float 출력 우선 시도
-                    try
+                    if (first.Value is DenseTensor<float> tf)
                     {
-                        var tf = first.AsTensor<float>();
-                        var scores = tf.ToArray();
-
+                        int cls = DecodeClassIndex(tf, out float score);
+                        if (cls >= 0 && cls < _carModelNames.Length) return _carModelNames[cls];
+                        return cls >= 0 ? $"Model#{cls}" : "";
+                    }
+                    else if (first.Value is DenseTensor<long> tl)
+                    {
+                        // 거의 안 나오지만 안전 처리
+                        var arr = tl.ToArray();
                         int bestIdx = 0;
-                        float best = scores[0];
-                        for (int i = 1; i < scores.Length; i++)
+                        long best = arr[0];
+                        for (int i = 1; i < arr.Length; i++)
                         {
-                            if (scores[i] > best) { best = scores[i]; bestIdx = i; }
+                            if (arr[i] > best) { best = arr[i]; bestIdx = i; }
                         }
-
-                        if (_carModelNames != null && _carModelNames.Length > bestIdx)
-                            return _carModelNames[bestIdx];
-
+                        if (bestIdx >= 0 && bestIdx < _carModelNames.Length) return _carModelNames[bestIdx];
                         return $"Model#{bestIdx}";
                     }
-                    catch
-                    {
-                        // float이 아니면 long 시도
-                        var tl = first.AsTensor<long>();
-                        var scores = tl.ToArray();
 
-                        int bestIdx = 0;
-                        long best = scores[0];
-                        for (int i = 1; i < scores.Length; i++)
-                        {
-                            if (scores[i] > best) { best = scores[i]; bestIdx = i; }
-                        }
-
-                        if (_carModelNames != null && _carModelNames.Length > bestIdx)
-                            return _carModelNames[bestIdx];
-
-                        return $"Model#{bestIdx}";
-                    }
+                    return "";
                 }
             }
             catch
             {
                 return "";
             }
+        }
+
+        // ✅ tf shape:
+        // - Classification: [1, C] or [C]
+        // - YOLO-like: [1, Ch, N] (예: 1x210x525) -> best obj*cls 기반으로 classIdx 반환
+        private int DecodeClassIndex(DenseTensor<float> tf, out float bestScore)
+        {
+            bestScore = 0f;
+
+            var dims = tf.Dimensions.ToArray();
+            if (dims.Length == 1)
+            {
+                // [C]
+                var arr = tf.ToArray();
+                int best = ArgMax(arr, out bestScore);
+                return best;
+            }
+            if (dims.Length == 2)
+            {
+                // [1, C] or [C, 1]
+                if (dims[0] == 1)
+                {
+                    var arr = tf.ToArray();
+                    int best = ArgMax(arr, out bestScore);
+                    return best;
+                }
+                else
+                {
+                    // [C, 1] 같은 케이스
+                    var arr = tf.ToArray();
+                    int best = ArgMax(arr, out bestScore);
+                    return best;
+                }
+            }
+            if (dims.Length == 3)
+            {
+                // [1, Ch, N] (대부분)
+                // YOLO 가정: ch = 5 + numClasses (x,y,w,h,obj + classes...)
+                // best = max over N of (obj * maxClassScore)
+                int b = dims[0];
+                int ch = dims[1];
+                int n = dims[2];
+                if (b != 1 || ch < 6 || n < 1)
+                {
+                    // 예외 shape -> flatten argmax
+                    var flat = tf.ToArray();
+                    int idx = ArgMax(flat, out bestScore);
+                    return idx;
+                }
+
+                int numClasses = ch - 5;
+                int bestClass = -1;
+                float best = float.MinValue;
+
+                for (int i = 0; i < n; i++)
+                {
+                    float obj = tf[0, 4, i];
+                    // obj가 logit이면 sigmoid 필요할 수 있는데,
+                    // 일단 스케일만 중요하니 그대로 사용 (원하면 Sigmoid(obj)로 바꿔도 됨)
+
+                    int localBestClass = 0;
+                    float localBest = tf[0, 5, i];
+                    for (int c = 1; c < numClasses; c++)
+                    {
+                        float s = tf[0, 5 + c, i];
+                        if (s > localBest) { localBest = s; localBestClass = c; }
+                    }
+
+                    float score = obj * localBest;
+                    if (score > best)
+                    {
+                        best = score;
+                        bestClass = localBestClass;
+                    }
+                }
+
+                bestScore = best;
+                return bestClass;
+            }
+
+            // 그 외: flatten
+            {
+                var arr = tf.ToArray();
+                int idx = ArgMax(arr, out bestScore);
+                return idx;
+            }
+        }
+
+        private static int ArgMax(float[] arr, out float best)
+        {
+            best = float.MinValue;
+            int bestIdx = -1;
+            for (int i = 0; i < arr.Length; i++)
+            {
+                if (arr[i] > best) { best = arr[i]; bestIdx = i; }
+            }
+            return bestIdx;
         }
 
         // =========================
