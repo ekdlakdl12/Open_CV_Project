@@ -81,7 +81,7 @@ namespace WpfApp1.ViewModels
 
             OpenVideoCommand = new RelayCommand(OpenVideo);
             _timer.Tick += Timer_Tick;
-            _timer.Interval = TimeSpan.FromMilliseconds(1); // 최대한 빠르게 호출
+            _timer.Interval = TimeSpan.FromMilliseconds(1);
             InitializeDetectors();
         }
 
@@ -99,7 +99,6 @@ namespace WpfApp1.ViewModels
             if (!_video.Read(_frame) || _frame.Empty()) return;
             long nowMs = Environment.TickCount64;
 
-            // 1. 차선 분석 (부하가 크므로 0.7초로 주기 완화)
             if (!_isLaneBusy && _yolop != null && (nowMs - _lastLaneInferMs) >= 700)
             {
                 _isLaneBusy = true; _lastLaneInferMs = nowMs;
@@ -122,7 +121,6 @@ namespace WpfApp1.ViewModels
                 });
             }
 
-            // 2. 객체 검출 (실행 중이 아닐 때만 비동기 시작)
             if (!_isBusy && _detector != null)
             {
                 _isBusy = true;
@@ -137,7 +135,6 @@ namespace WpfApp1.ViewModels
                             TrackAndMatch(dets, vTime);
                             lock (_detLock) { _currentDetections = dets.ToList(); }
 
-                            // 차종 분류는 이미 캐시된 경우 건너뜀 (성능 핵심)
                             foreach (var d in dets.Where(x => x.ClassId == 2 && !_modelCache.ContainsKey(x.TrackId)))
                             {
                                 Rect safeBox = new Rect(Math.Max(0, d.Box.X), Math.Max(0, d.Box.Y),
@@ -156,13 +153,11 @@ namespace WpfApp1.ViewModels
                 });
             }
 
-            // 3. 렌더링 및 카운팅
             lock (_trackedObjects) { UpdateCounting(_frame.Width, _frame.Height); }
 
             List<Detection> drawList;
             lock (_detLock) { drawList = _currentDetections.ToList(); }
 
-            // ✅ 박스가 느리게 느껴지지 않도록 현재 프레임에서 그리기 루틴 실행
             DrawOutput(_frame, drawList);
             FrameImage = _frame.ToBitmapSource();
         }
@@ -233,7 +228,6 @@ namespace WpfApp1.ViewModels
         {
             if (_laneAnalysisStable != null) _laneAnalyzer.DrawOnFrame(frame, _laneAnalysisStable);
 
-            // 상태바
             Cv2.Rectangle(frame, new Rect(40, 40, 200, 80), Scalar.Black, -1);
             Cv2.PutText(frame, $"Lanes: {TotalLanes} / Ego: {CurrentLane}", new Point(50, 70), HersheyFonts.HersheySimplex, 0.5, Scalar.White, 1);
             Cv2.Line(frame, 0, (int)(frame.Height * 0.7), frame.Width, (int)(frame.Height * 0.7), Scalar.Red, 2);
@@ -243,7 +237,6 @@ namespace WpfApp1.ViewModels
                 lock (_trackedObjects)
                 {
                     if (!_trackedObjects.TryGetValue(d.TrackId, out var track)) continue;
-
                     if (!_colorCache.TryGetValue(d.TrackId, out var color)) color = Scalar.Yellow;
                     Cv2.Rectangle(frame, d.Box, color, 2);
 
