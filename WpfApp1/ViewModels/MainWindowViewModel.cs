@@ -1,4 +1,5 @@
-﻿using Microsoft.Win32;
+using Microsoft.Win32;
+using MongoDB.Driver;
 using OpenCvSharp;
 using OpenCvSharp.WpfExtensions;
 using WpfApp1.Models;
@@ -14,6 +15,12 @@ using System.Windows;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
+using System.Collections.Concurrent;
+using System.Threading;
+
+using Microsoft.ML.OnnxRuntime;
+using Microsoft.ML.OnnxRuntime.Tensors;
+
 using CvPoint = OpenCvSharp.Point;
 
 namespace WpfApp1.ViewModels
@@ -22,6 +29,10 @@ namespace WpfApp1.ViewModels
     {
         private const string BaseOnnxPath = "Scripts/yolov8n.onnx";
         private const string YolopOnnxPath = "Scripts/yolop-640-640.onnx";
+
+        // ✅ 차량 모델명 분류기
+        private const string CarModelOnnxPath = "Scripts/best.onnx";
+        private const string CarModelNamesPath = "Scripts/car_models.txt"; // (있으면 사용)
 
         private readonly VideoPlayerService _video = new();
         private YoloDetectService? _detector;
@@ -39,6 +50,21 @@ namespace WpfApp1.ViewModels
         private volatile bool _isBusy = false;       // yolo v8
         private volatile bool _isLaneBusy = false;   // yolop
         private readonly DispatcherTimer _timer = new();
+
+        // =========================
+        // Speed/DB: MongoDB 컬렉션(옵션)
+        // =========================
+        private IMongoCollection<VehicleRecord>? _records;
+        private bool _dbEnabled = true;
+        public bool DbEnabled
+        {
+            get => _dbEnabled;
+            set { _dbEnabled = value; OnPropertyChanged(); }
+        }
+
+        // ✅ DB 프리징 방지용 큐 + 워커
+        private readonly ConcurrentQueue<VehicleRecord> _dbQueue = new();
+        private CancellationTokenSource? _dbCts;
 
         private TimeSpan _frameInterval = TimeSpan.FromMilliseconds(33);
 
@@ -129,15 +155,49 @@ namespace WpfApp1.ViewModels
         // =========================
         private readonly LaneAnalyzer _laneAnalyzer = new LaneAnalyzer();
 
+        // =========================
+        // ✅ Car Model Classifier (v2_Number 방식)
+        // =========================
+        private InferenceSession? _classSession;
+        private readonly object _classLock = new();
+        private string[] _carModelNames = Array.Empty<string>();
+
+        // trackId -> modelName cache
+        private readonly ConcurrentDictionary<int, string> _modelCache = new();
+        private readonly ConcurrentDictionary<int, long> _modelLastInferMs = new();
+        private readonly SemaphoreSlim _classSem = new(1, 1); // 동시 추론 1개 제한
+        private const int MODEL_INFER_COOLDOWN_MS = 1200;      // 같은 track 재추론 제한
+
+        // best.onnx meta 1회 출력
+        private bool _classInfoPrinted = false;
+        private readonly object _statusOnceLock = new();
+
         public MainWindowViewModel()
         {
+            // MongoDB 연결 (실패해도 앱은 계속 동작) + timeout(프리징 방지)
+            try
+            {
+                var settings = MongoClientSettings.FromConnectionString("mongodb://localhost:27017");
+                settings.ServerSelectionTimeout = TimeSpan.FromMilliseconds(200);
+                settings.ConnectTimeout = TimeSpan.FromMilliseconds(200);
+
+                var client = new MongoClient(settings);
+                var db = client.GetDatabase("TrafficControlDB");
+                _records = db.GetCollection<VehicleRecord>("DetectionLogs");
+            }
+            catch
+            {
+                _records = null;
+                _dbEnabled = false;
+            }
+
             OpenVideoCommand = new RelayCommand(OpenVideo);
             StopCommand = new RelayCommand(Stop);
 
             _timer.Tick += Timer_Tick;
             _timer.Interval = _frameInterval;
 
-            // ✅ LaneAnalyzer 튜닝(네가 주신 LaneAnalyzer.cs 파라미터와 동일 필드명)
+            // ✅ LaneAnalyzer 튜닝
             _laneAnalyzer.RoiYStartRatio = 0.52f;
             _laneAnalyzer.RoiXMarginRatio = 0.02f;
 
@@ -150,7 +210,6 @@ namespace WpfApp1.ViewModels
 
             _laneAnalyzer.CorridorBottomBandH = 60;
 
-            // Follow 관련(백업 LaneAnalyzer 내부 사용)
             _laneAnalyzer.SampleBandCount = 18;
             _laneAnalyzer.SampleYTopRatio = 0.30f;
             _laneAnalyzer.SampleYBottomRatio = 0.95f;
@@ -162,6 +221,12 @@ namespace WpfApp1.ViewModels
 
             InitializeDetector();
             InitializeYolop();
+
+            // ✅ CarModel Classifier init
+            InitializeCarClassifier();
+
+            // ✅ DB 워커 시작
+            StartDbWorker();
         }
 
         private void Ui(Action a)
@@ -195,6 +260,77 @@ namespace WpfApp1.ViewModels
                 SafeSetStatus($"YOLOP ONNX 없음: {fullPath}");
         }
 
+        private void InitializeCarClassifier()
+        {
+            try
+            {
+                string onnxPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CarModelOnnxPath);
+                if (!File.Exists(onnxPath))
+                {
+                    SafeSetStatus($"best.onnx 없음: {onnxPath}");
+                    _classSession = null;
+                    return;
+                }
+
+                // names 로드(있으면 사용)
+                string namesPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CarModelNamesPath);
+                if (File.Exists(namesPath))
+                {
+                    var lines = File.ReadAllLines(namesPath)
+                                    .Select(x => x.Trim())
+                                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                                    .ToArray();
+                    if (lines.Length > 0) _carModelNames = lines;
+                }
+
+                // 세션 생성
+                _classSession = new InferenceSession(onnxPath);
+
+                // meta 1회 표시
+                PrintClassifierInfoOnce();
+            }
+            catch (Exception ex)
+            {
+                SafeSetStatus($"best.onnx 로드 실패: {ex.Message}");
+                _classSession = null;
+            }
+        }
+
+        private void PrintClassifierInfoOnce()
+        {
+            lock (_statusOnceLock)
+            {
+                if (_classInfoPrinted) return;
+                _classInfoPrinted = true;
+            }
+
+            try
+            {
+                if (_classSession == null)
+                {
+                    SafeSetStatus("best.onnx: session null");
+                    return;
+                }
+
+                var inName = _classSession.InputMetadata.Keys.First();
+                var inMeta = _classSession.InputMetadata[inName];
+                var inDims = string.Join("x", inMeta.Dimensions.Select(d => d.ToString()));
+                var inType = inMeta.ElementType?.ToString() ?? "unknown";
+
+                var outName = _classSession.OutputMetadata.Keys.First();
+                var outMeta = _classSession.OutputMetadata[outName];
+                var outDims = string.Join("x", outMeta.Dimensions.Select(d => d.ToString()));
+                var outType = outMeta.ElementType?.ToString() ?? "unknown";
+
+                SafeSetStatus($"best.onnx OK | IN:{inName}[{inDims}] {inType} | OUT:{outName}[{outDims}] {outType}");
+            }
+            catch (Exception ex)
+            {
+                SafeSetStatus($"best.onnx meta fail: {ex.Message}");
+            }
+        }
+
+
         private void ApplyTimerIntervalFromVideo()
         {
             double fps = _video.Fps;
@@ -217,9 +353,7 @@ namespace WpfApp1.ViewModels
 
             long nowMs = Environment.TickCount64;
 
-            // =========================
             // 1) YOLOP (lane/drivable) 200ms
-            // =========================
             if (!_isLaneBusy && _yolop != null && (nowMs - _lastLaneInferMs) >= _laneInferIntervalMs)
             {
                 _lastLaneInferMs = nowMs;
@@ -262,9 +396,7 @@ namespace WpfApp1.ViewModels
                 });
             }
 
-            // =========================
             // 2) YOLOv8 (vehicle)
-            // =========================
             if (!_isBusy && _detector != null)
             {
                 _isBusy = true;
@@ -279,7 +411,7 @@ namespace WpfApp1.ViewModels
 
                         lock (_lock)
                         {
-                            TrackAndMatch(dets, time);
+                            TrackAndMatch(dets, time, vehicleFrame); // ✅ frame 같이 넘겨서 crop 가능
                             _currentDetections = dets;
                         }
 
@@ -301,9 +433,7 @@ namespace WpfApp1.ViewModels
                 });
             }
 
-            // =========================
             // 3) Draw
-            // =========================
             lock (_lock)
             {
                 UpdateCounting(_frame.Width, _frame.Height);
@@ -314,7 +444,7 @@ namespace WpfApp1.ViewModels
             Ui(() => FrameImage = bmp);
         }
 
-        private void TrackAndMatch(List<Detection> detections, double timeMsec)
+        private void TrackAndMatch(List<Detection> detections, double timeMsec, Mat frameForCrop)
         {
             var usedDets = new HashSet<int>();
 
@@ -333,6 +463,15 @@ namespace WpfApp1.ViewModels
                 {
                     detections[bestIdx].TrackId = track.Id;
                     track.Update(detections[bestIdx], timeMsec);
+
+                    UpdateSpeedAndDirection(track);
+
+                    // ✅ DB는 큐에 넣기만
+                    TryInsertRecord(detections[bestIdx], track);
+
+                    // ✅ Car 모델명 분류 (v2_Number 방식)
+                    TryQueueCarModelInference(detections[bestIdx], track.Id, frameForCrop);
+
                     usedDets.Add(bestIdx);
                 }
                 else track.Missed();
@@ -343,6 +482,9 @@ namespace WpfApp1.ViewModels
                 var newTrack = new TrackedObject(d, timeMsec);
                 d.TrackId = newTrack.Id;
                 _trackedObjects[newTrack.Id] = newTrack;
+
+                // 새 트랙도 모델명 분류 시도(카인 경우)
+                TryQueueCarModelInference(d, newTrack.Id, frameForCrop);
             }
 
             var deleteIds = _trackedObjects
@@ -355,7 +497,79 @@ namespace WpfApp1.ViewModels
                 _trackedObjects.Remove(id);
                 _laneStates.Remove(id);
                 _countedIds.Remove(id);
+
+                _modelCache.TryRemove(id, out _);
+                _modelLastInferMs.TryRemove(id, out _);
             }
+        }
+
+        private void TryQueueCarModelInference(Detection det, int trackId, Mat frame)
+        {
+            // 분류기 없으면 스킵
+            if (_classSession == null) return;
+
+            // Car만 (너가 원한 Acura 같은 모델명은 Car 모델 분류기 기준)
+            if (det.ClassId != 2) return;
+
+            // 박스 너무 작으면 스킵
+            if (det.Box.Width < 30 || det.Box.Height < 30) return;
+
+            long now = Environment.TickCount64;
+
+            // 이미 모델명 있으면 너무 자주 갱신하지 않기
+            if (_modelLastInferMs.TryGetValue(trackId, out var last) && (now - last) < MODEL_INFER_COOLDOWN_MS)
+                return;
+
+            _modelLastInferMs[trackId] = now;
+
+            // crop 영역 클립
+            var r = ClipRect(det.Box, frame.Width, frame.Height);
+            if (r.Width <= 0 || r.Height <= 0) return;
+
+            // crop 복사 (비동기에서 frame 수명 문제 방지)
+            Mat crop;
+            try
+            {
+                crop = new Mat(frame, r).Clone();
+            }
+            catch
+            {
+                return;
+            }
+
+            // 비동기 분류 (동시 1개 제한)
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await _classSem.WaitAsync();
+
+                    // 너무 오래된 crop이면 의미 없으니 스킵할 수도 있음(여기선 그대로)
+                    string name = GetSpecificCarModel(crop);
+
+                    if (!string.IsNullOrWhiteSpace(name) && name != "ERR")
+                        _modelCache[trackId] = name;
+                }
+                catch { }
+                finally
+                {
+                    crop.Dispose();
+                    _classSem.Release();
+                }
+            });
+        }
+
+        private static OpenCvSharp.Rect ClipRect(OpenCvSharp.Rect r, int w, int h)
+        {
+            int x = Math.Max(0, r.X);
+            int y = Math.Max(0, r.Y);
+            int x2 = Math.Min(w, r.X + r.Width);
+            int y2 = Math.Min(h, r.Y + r.Height);
+
+            int ww = x2 - x;
+            int hh = y2 - y;
+            if (ww <= 0 || hh <= 0) return new OpenCvSharp.Rect(0, 0, 0, 0);
+            return new OpenCvSharp.Rect(x, y, ww, hh);
         }
 
         private void UpdateCounting(int w, int h)
@@ -435,6 +649,31 @@ namespace WpfApp1.ViewModels
             return st.StableLane;
         }
 
+        // ✅ 2번 프로젝트 스타일: 배경 박스 + 텍스트
+        private static void DrawLabelBox(Mat frame, string text, int x, int y, double scale, Scalar bg, Scalar fg)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return;
+
+            var size = Cv2.GetTextSize(text, HersheyFonts.HersheySimplex, scale, 1, out int baseLine);
+            int pad = 4;
+
+            int rectX = x;
+            int rectY = y - size.Height - pad;
+            int rectW = size.Width + pad * 2;
+            int rectH = size.Height + baseLine + pad * 2;
+
+            rectY = Math.Max(0, rectY);
+            rectX = Math.Max(0, rectX);
+
+            if (rectX + rectW > frame.Width) rectW = frame.Width - rectX;
+            if (rectY + rectH > frame.Height) rectH = frame.Height - rectY;
+            if (rectW <= 0 || rectH <= 0) return;
+
+            Cv2.Rectangle(frame, new OpenCvSharp.Rect(rectX, rectY, rectW, rectH), bg, -1);
+            Cv2.PutText(frame, text, new CvPoint(rectX + pad, rectY + rectH - baseLine - pad),
+                        HersheyFonts.HersheySimplex, scale, fg, 1, LineTypes.AntiAlias);
+        }
+
         private void DrawOutput(Mat frame)
         {
             // 1) Drivable overlay
@@ -445,7 +684,7 @@ namespace WpfApp1.ViewModels
                 Cv2.AddWeighted(overlay, 0.20, frame, 0.80, 0, frame);
             }
 
-            // 2) LaneProb overlay (표시용 빨간색, 얇게)
+            // 2) LaneProb overlay
             if (_laneProb != null && !_laneProb.Empty())
             {
                 using var prob8u = new Mat();
@@ -465,13 +704,14 @@ namespace WpfApp1.ViewModels
             if (_laneAnalysisStable != null)
                 _laneAnalyzer.DrawOnFrame(frame, _laneAnalysisStable);
 
-            // 4) Vehicles -> lane mapping
+            // 4) Vehicles -> (1줄:속도+모델명 / 2줄:Car|Lane)
             foreach (var d in _currentDetections)
             {
                 if (!_trackedObjects.TryGetValue(d.TrackId, out var track)) continue;
 
-                int displaySpeed = (int)(track.RelativeSpeed * 8.5);
-                if (displaySpeed > 130) displaySpeed = 110;
+                // 기존 속도 로직 유지(너 코드)
+                double kmh = track.RelativeSpeed * 8.5;
+                if (kmh > 130) kmh = 110;
 
                 var bottomCenter = new CvPoint(
                     d.Box.X + d.Box.Width / 2,
@@ -480,7 +720,6 @@ namespace WpfApp1.ViewModels
 
                 bool hasLane = false;
                 int laneNum = -1;
-
                 if (_laneAnalysisStable != null)
                     hasLane = _laneAnalyzer.TryGetLaneNumberForPoint(_laneAnalysisStable, bottomCenter, out laneNum);
 
@@ -488,16 +727,28 @@ namespace WpfApp1.ViewModels
 
                 Cv2.Rectangle(frame, d.Box, Scalar.Yellow, 2);
 
-                string label = $"{GetTypeName(d.ClassId)} {displaySpeed}km/h";
-                label += (stableLane > 0) ? $" | Lane:{stableLane}" : " | Lane:?";
+                // ✅ 모델명 (trackId 캐시에서)
+                _modelCache.TryGetValue(d.TrackId, out var modelName);
+                modelName ??= "";
 
-                Cv2.PutText(frame,
-                    label,
-                    new CvPoint(d.Box.X, Math.Max(0, d.Box.Y - 5)),
-                    HersheyFonts.HersheySimplex,
-                    0.5,
-                    (stableLane > 0) ? Scalar.Lime : Scalar.Orange,
-                    1);
+                // ✅ 1줄: "속도 + 모델명"
+                string line1 = $"{kmh:0.0}km/h";
+                if (!string.IsNullOrWhiteSpace(modelName))
+                    line1 += $"  {modelName}";
+
+                // ✅ 2줄: "Car/Truck/Bus | Lane:#"
+                string typeText = GetTypeName(d.ClassId);
+                string laneText = (stableLane > 0) ? $"Lane:{stableLane}" : "Lane:?";
+                string line2 = $"{typeText} | {laneText}";
+
+                bool speedWarn = kmh > 100.0;
+                var bg1 = speedWarn ? Scalar.Red : Scalar.Black;
+
+                int x = d.Box.X;
+                int yTop = Math.Max(10, d.Box.Y);
+
+                DrawLabelBox(frame, line1, x, yTop, 0.45, bg1, Scalar.White);
+                DrawLabelBox(frame, line2, x, yTop + 18, 0.45, Scalar.Black, (stableLane > 0) ? Scalar.Lime : Scalar.Orange);
 
                 Cv2.Circle(frame, bottomCenter, 3, (stableLane > 0) ? Scalar.Lime : Scalar.Orange, -1);
             }
@@ -525,6 +776,9 @@ namespace WpfApp1.ViewModels
                     _countedIds.Clear();
                     _trackedObjects.Clear();
                     _laneStates.Clear();
+
+                    _modelCache.Clear();
+                    _modelLastInferMs.Clear();
 
                     Ui(() =>
                     {
@@ -558,6 +812,9 @@ namespace WpfApp1.ViewModels
 
         public void Dispose()
         {
+            _dbCts?.Cancel();
+            _dbCts = null;
+
             Stop();
             _frame.Dispose();
             _detector?.Dispose();
@@ -568,6 +825,179 @@ namespace WpfApp1.ViewModels
             _laneProb?.Dispose();
 
             _laneAnalysisStable = null;
+
+            try { _classSession?.Dispose(); } catch { }
         }
+
+        // DB Worker
+        private void StartDbWorker()
+        {
+            if (_dbCts != null) return;
+
+            _dbCts = new CancellationTokenSource();
+            var token = _dbCts.Token;
+
+            Task.Run(async () =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        if (!_dbEnabled || _records == null)
+                        {
+                            await Task.Delay(300, token);
+                            continue;
+                        }
+
+                        if (_dbQueue.TryDequeue(out var rec))
+                        {
+                            await _records.InsertOneAsync(rec, cancellationToken: token);
+                        }
+                        else
+                        {
+                            await Task.Delay(10, token);
+                        }
+                    }
+                    catch
+                    {
+                        await Task.Delay(200, token);
+                    }
+                }
+            }, token);
+        }
+
+        // Speed/DB helpers
+        private void UpdateSpeedAndDirection(TrackedObject track)
+        {
+            // 필요 시 확장
+        }
+
+        private void TryInsertRecord(Detection det, TrackedObject track)
+        {
+            if (!_dbEnabled) return;
+            if (_records == null) return;
+
+            try
+            {
+                var r = new VehicleRecord
+                {
+                    DetectTime = DateTime.Now,
+                    TrackId = track.Id,
+                    ClassId = det.ClassId,
+                    ClassName = det.ClassName ?? string.Empty,
+                    Confidence = det.Confidence,
+                    BBoxX = det.Box.X,
+                    BBoxY = det.Box.Y,
+                    BBoxW = det.Box.Width,
+                    BBoxH = det.Box.Height,
+                    Speed = (int)Math.Round(track.RelativeSpeed),
+                    SpeedKmh = track.RelativeSpeed,
+                    Direction = null,
+                    IsViolation = false,
+                    ViolationReason = null,
+                    LicensePlate = null,
+                };
+
+                _dbQueue.Enqueue(r);
+                while (_dbQueue.Count > 2000 && _dbQueue.TryDequeue(out _)) { }
+            }
+            catch { }
+        }
+
+        // ✅ 차량 모델명 분류 (입/출력 shape 자동 대응 + float/int64 대응)
+        private string GetSpecificCarModel(Mat cropImg)
+        {
+            try
+            {
+                if (_classSession == null) return "";
+
+                // 입력 메타
+                var inputName = _classSession.InputMetadata.Keys.First();
+                var dims = _classSession.InputMetadata[inputName].Dimensions.ToArray(); // 보통 [1,3,H,W]
+                if (dims.Length < 4) return "";
+
+                int H = (dims[2] > 0) ? dims[2] : 160;
+                int W = (dims[3] > 0) ? dims[3] : 160;
+
+                using var rgbImg = new Mat();
+                Cv2.CvtColor(cropImg, rgbImg, ColorConversionCodes.BGR2RGB);
+
+                using var resized = new Mat();
+                Cv2.Resize(rgbImg, resized, new OpenCvSharp.Size(W, H));
+
+                var input = new DenseTensor<float>(new[] { 1, 3, H, W });
+
+                for (int y = 0; y < H; y++)
+                {
+                    for (int x = 0; x < W; x++)
+                    {
+                        var p = resized.At<Vec3b>(y, x); // RGB
+                        input[0, 0, y, x] = p.Item0 / 255f;
+                        input[0, 1, y, x] = p.Item1 / 255f;
+                        input[0, 2, y, x] = p.Item2 / 255f;
+                    }
+                }
+
+                lock (_classLock)
+                {
+                    using var results = _classSession.Run(new[]
+                    {
+                NamedOnnxValue.CreateFromTensor(inputName, input)
+            });
+
+                    var first = results.First();
+
+                    // ✅ 1) float 출력 먼저 시도
+                    try
+                    {
+                        var tf = first.AsTensor<float>();
+                        var outDims = tf.Dimensions.ToArray();
+                        if (outDims.Length != 2 || outDims[0] != 1) return "";
+
+                        int n = outDims[1];
+                        var scores = tf.ToArray();
+
+                        int bestIdx = 0;
+                        float best = scores[0];
+                        for (int i = 1; i < scores.Length; i++)
+                        {
+                            if (scores[i] > best) { best = scores[i]; bestIdx = i; }
+                        }
+
+                        if (_carModelNames != null && _carModelNames.Length > bestIdx)
+                            return _carModelNames[bestIdx];
+
+                        return $"Model#{bestIdx}";
+                    }
+                    catch
+                    {
+                        // ✅ 2) float이 아니면 long 출력 시도
+                        var tl = first.AsTensor<long>();
+                        var outDims = tl.Dimensions.ToArray();
+                        if (outDims.Length != 2 || outDims[0] != 1) return "";
+
+                        int n = outDims[1];
+                        var scores = tl.ToArray();
+
+                        int bestIdx = 0;
+                        long best = scores[0];
+                        for (int i = 1; i < scores.Length; i++)
+                        {
+                            if (scores[i] > best) { best = scores[i]; bestIdx = i; }
+                        }
+
+                        if (_carModelNames != null && _carModelNames.Length > bestIdx)
+                            return _carModelNames[bestIdx];
+
+                        return $"Model#{bestIdx}";
+                    }
+                }
+            }
+            catch
+            {
+                return "ERR";
+            }
+        }
+
     }
 }

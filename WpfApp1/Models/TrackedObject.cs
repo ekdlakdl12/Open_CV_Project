@@ -100,5 +100,12 @@ namespace WpfApp1.Models
             // 속도 = 거리 / 시간. 상수 100을 곱하여 값을 조정 (임의의 스케일)
             RelativeSpeed = (distance / deltaMs) * 100;
         }
-    }
+    
+        // ===== Speed/DB 통합용 추가 필드 =====
+        public double SpeedKmh { get; set; }
+        public string? Direction { get; set; }
+        public int LaneNumber { get; set; }
+        public bool IsViolation { get; set; }
+        public string? ViolationReason { get; set; }
+}
 }
