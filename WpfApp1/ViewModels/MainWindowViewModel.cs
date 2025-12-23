@@ -1,3 +1,8 @@
+// MainWindowViewModel.cs (FULL REPLACEMENT)
+// - YOLOv8 detect + YOLOP lane + Speed/DB + CarModel(best.onnx) classification integrated
+// - Car model classification runs ONCE per track (async queue worker) to prevent freezing
+// - Label style: line1 = "xx.xkm/h Acura RL Sedan 2012", line2 = "Car | Lane:4"
+
 using Microsoft.Win32;
 using MongoDB.Driver;
 using OpenCvSharp;
@@ -22,6 +27,8 @@ using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 
 using CvPoint = OpenCvSharp.Point;
+using CvRect = OpenCvSharp.Rect;
+using CvSize = OpenCvSharp.Size;
 
 namespace WpfApp1.ViewModels
 {
@@ -30,9 +37,17 @@ namespace WpfApp1.ViewModels
         private const string BaseOnnxPath = "Scripts/yolov8n.onnx";
         private const string YolopOnnxPath = "Scripts/yolop-640-640.onnx";
 
-        // ✅ 차량 모델명 분류기
+        // ✅ car model classifier (best.onnx)
         private const string CarModelOnnxPath = "Scripts/best.onnx";
-        private const string CarModelNamesPath = "Scripts/car_models.txt"; // (있으면 사용)
+        // labels file (여러 이름 후보 지원)
+        private static readonly string[] CarModelLabelFileCandidates =
+        {
+            "Scripts/car_model_names.txt",
+            "Scripts/carmodel_names.txt",
+            "Scripts/car_models.txt",
+            "Scripts/labels.txt",
+            "Scripts/classes.txt"
+        };
 
         private readonly VideoPlayerService _video = new();
         private YoloDetectService? _detector;
@@ -151,26 +166,32 @@ namespace WpfApp1.ViewModels
         public string CurrentLaneLabel => $"Lane {CurrentLane}/{TotalLanes}";
 
         // =========================
-        // LaneAnalyzer (backup point)
+        // LaneAnalyzer
         // =========================
         private readonly LaneAnalyzer _laneAnalyzer = new LaneAnalyzer();
 
         // =========================
-        // ✅ Car Model Classifier (v2_Number 방식)
+        // ✅ Car Model Classifier (best.onnx)
         // =========================
         private InferenceSession? _classSession;
         private readonly object _classLock = new();
         private string[] _carModelNames = Array.Empty<string>();
 
-        // trackId -> modelName cache
-        private readonly ConcurrentDictionary<int, string> _modelCache = new();
-        private readonly ConcurrentDictionary<int, long> _modelLastInferMs = new();
-        private readonly SemaphoreSlim _classSem = new(1, 1); // 동시 추론 1개 제한
-        private const int MODEL_INFER_COOLDOWN_MS = 1200;      // 같은 track 재추론 제한
+        // trackId -> modelName 상태
+        private class ModelState
+        {
+            public bool Requested;
+            public string Name = "";
+        }
+        private readonly ConcurrentDictionary<int, ModelState> _modelStates = new();
 
-        // best.onnx meta 1회 출력
-        private bool _classInfoPrinted = false;
+        // crop job
+        private readonly ConcurrentQueue<(int trackId, Mat crop)> _modelQueue = new();
+        private CancellationTokenSource? _modelCts;
+
+        // status once-print
         private readonly object _statusOnceLock = new();
+        private bool _classInfoPrinted = false;
 
         public MainWindowViewModel()
         {
@@ -221,12 +242,13 @@ namespace WpfApp1.ViewModels
 
             InitializeDetector();
             InitializeYolop();
-
-            // ✅ CarModel Classifier init
-            InitializeCarClassifier();
+            InitializeCarClassifier();   // ✅ best.onnx
 
             // ✅ DB 워커 시작
             StartDbWorker();
+
+            // ✅ 모델 분류 워커 시작
+            StartModelWorker();
         }
 
         private void Ui(Action a)
@@ -272,28 +294,41 @@ namespace WpfApp1.ViewModels
                     return;
                 }
 
-                // names 로드(있으면 사용)
-                string namesPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CarModelNamesPath);
-                if (File.Exists(namesPath))
-                {
-                    var lines = File.ReadAllLines(namesPath)
-                                    .Select(x => x.Trim())
-                                    .Where(x => !string.IsNullOrWhiteSpace(x))
-                                    .ToArray();
-                    if (lines.Length > 0) _carModelNames = lines;
-                }
+                // labels 로드(있으면 모델명 출력, 없으면 Model#idx로라도 출력)
+                _carModelNames = LoadCarModelNames();
 
-                // 세션 생성
-                _classSession = new InferenceSession(onnxPath);
+                var opts = new SessionOptions();
+                // CPU로 안정 운영 (GPU 쓰려면 여기 변경)
+                _classSession = new InferenceSession(onnxPath, opts);
 
-                // meta 1회 표시
                 PrintClassifierInfoOnce();
             }
             catch (Exception ex)
             {
-                SafeSetStatus($"best.onnx 로드 실패: {ex.Message}");
                 _classSession = null;
+                SafeSetStatus($"best.onnx 로드 실패: {ex.Message}");
             }
+        }
+
+        private string[] LoadCarModelNames()
+        {
+            try
+            {
+                foreach (var rel in CarModelLabelFileCandidates)
+                {
+                    var p = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, rel);
+                    if (!File.Exists(p)) continue;
+
+                    var lines = File.ReadAllLines(p)
+                        .Select(s => s.Trim())
+                        .Where(s => !string.IsNullOrWhiteSpace(s))
+                        .ToArray();
+
+                    if (lines.Length > 0) return lines;
+                }
+            }
+            catch { }
+            return Array.Empty<string>();
         }
 
         private void PrintClassifierInfoOnce()
@@ -329,7 +364,6 @@ namespace WpfApp1.ViewModels
                 SafeSetStatus($"best.onnx meta fail: {ex.Message}");
             }
         }
-
 
         private void ApplyTimerIntervalFromVideo()
         {
@@ -411,7 +445,7 @@ namespace WpfApp1.ViewModels
 
                         lock (_lock)
                         {
-                            TrackAndMatch(dets, time, vehicleFrame); // ✅ frame 같이 넘겨서 crop 가능
+                            TrackAndMatch(dets, time, vehicleFrame); // ✅ frame 전달(크롭)
                             _currentDetections = dets;
                         }
 
@@ -469,8 +503,8 @@ namespace WpfApp1.ViewModels
                     // ✅ DB는 큐에 넣기만
                     TryInsertRecord(detections[bestIdx], track);
 
-                    // ✅ Car 모델명 분류 (v2_Number 방식)
-                    TryQueueCarModelInference(detections[bestIdx], track.Id, frameForCrop);
+                    // ✅ 모델 분류는 트랙당 1회만 비동기 큐로 요청
+                    TryEnqueueModelJob(track.Id, detections[bestIdx].Box, frameForCrop);
 
                     usedDets.Add(bestIdx);
                 }
@@ -483,8 +517,8 @@ namespace WpfApp1.ViewModels
                 d.TrackId = newTrack.Id;
                 _trackedObjects[newTrack.Id] = newTrack;
 
-                // 새 트랙도 모델명 분류 시도(카인 경우)
-                TryQueueCarModelInference(d, newTrack.Id, frameForCrop);
+                // 신규 트랙도 분류 요청
+                TryEnqueueModelJob(newTrack.Id, d.Box, frameForCrop);
             }
 
             var deleteIds = _trackedObjects
@@ -498,78 +532,51 @@ namespace WpfApp1.ViewModels
                 _laneStates.Remove(id);
                 _countedIds.Remove(id);
 
-                _modelCache.TryRemove(id, out _);
-                _modelLastInferMs.TryRemove(id, out _);
+                // 모델 상태도 정리
+                _modelStates.TryRemove(id, out _);
             }
         }
 
-        private void TryQueueCarModelInference(Detection det, int trackId, Mat frame)
+        private void TryEnqueueModelJob(int trackId, CvRect box, Mat frameForCrop)
         {
-            // 분류기 없으면 스킵
             if (_classSession == null) return;
 
-            // Car만 (너가 원한 Acura 같은 모델명은 Car 모델 분류기 기준)
-            if (det.ClassId != 2) return;
+            // 이미 요청됨이면 스킵
+            var st = _modelStates.GetOrAdd(trackId, _ => new ModelState());
+            if (st.Requested) return;
 
-            // 박스 너무 작으면 스킵
-            if (det.Box.Width < 30 || det.Box.Height < 30) return;
+            // 너무 작으면 스킵
+            if (box.Width < 30 || box.Height < 30) return;
 
-            long now = Environment.TickCount64;
+            // 안전 Rect로 클램프
+            int x = Math.Max(0, box.X);
+            int y = Math.Max(0, box.Y);
+            int w = Math.Min(box.Width, frameForCrop.Width - x);
+            int h = Math.Min(box.Height, frameForCrop.Height - y);
+            if (w <= 0 || h <= 0) return;
 
-            // 이미 모델명 있으면 너무 자주 갱신하지 않기
-            if (_modelLastInferMs.TryGetValue(trackId, out var last) && (now - last) < MODEL_INFER_COOLDOWN_MS)
-                return;
+            var safe = new CvRect(x, y, w, h);
 
-            _modelLastInferMs[trackId] = now;
-
-            // crop 영역 클립
-            var r = ClipRect(det.Box, frame.Width, frame.Height);
-            if (r.Width <= 0 || r.Height <= 0) return;
-
-            // crop 복사 (비동기에서 frame 수명 문제 방지)
+            // crop은 Clone해서 워커로 넘김 (원본 Mat dispose 영향 제거)
             Mat crop;
             try
             {
-                crop = new Mat(frame, r).Clone();
+                using var roi = new Mat(frameForCrop, safe);
+                crop = roi.Clone();
             }
             catch
             {
                 return;
             }
 
-            // 비동기 분류 (동시 1개 제한)
-            Task.Run(async () =>
+            st.Requested = true;
+            _modelQueue.Enqueue((trackId, crop));
+
+            // 큐 폭주 방지(최대 200개)
+            while (_modelQueue.Count > 200 && _modelQueue.TryDequeue(out var old))
             {
-                try
-                {
-                    await _classSem.WaitAsync();
-
-                    // 너무 오래된 crop이면 의미 없으니 스킵할 수도 있음(여기선 그대로)
-                    string name = GetSpecificCarModel(crop);
-
-                    if (!string.IsNullOrWhiteSpace(name) && name != "ERR")
-                        _modelCache[trackId] = name;
-                }
-                catch { }
-                finally
-                {
-                    crop.Dispose();
-                    _classSem.Release();
-                }
-            });
-        }
-
-        private static OpenCvSharp.Rect ClipRect(OpenCvSharp.Rect r, int w, int h)
-        {
-            int x = Math.Max(0, r.X);
-            int y = Math.Max(0, r.Y);
-            int x2 = Math.Min(w, r.X + r.Width);
-            int y2 = Math.Min(h, r.Y + r.Height);
-
-            int ww = x2 - x;
-            int hh = y2 - y;
-            if (ww <= 0 || hh <= 0) return new OpenCvSharp.Rect(0, 0, 0, 0);
-            return new OpenCvSharp.Rect(x, y, ww, hh);
+                try { old.crop.Dispose(); } catch { }
+            }
         }
 
         private void UpdateCounting(int w, int h)
@@ -652,8 +659,6 @@ namespace WpfApp1.ViewModels
         // ✅ 2번 프로젝트 스타일: 배경 박스 + 텍스트
         private static void DrawLabelBox(Mat frame, string text, int x, int y, double scale, Scalar bg, Scalar fg)
         {
-            if (string.IsNullOrWhiteSpace(text)) return;
-
             var size = Cv2.GetTextSize(text, HersheyFonts.HersheySimplex, scale, 1, out int baseLine);
             int pad = 4;
 
@@ -669,7 +674,7 @@ namespace WpfApp1.ViewModels
             if (rectY + rectH > frame.Height) rectH = frame.Height - rectY;
             if (rectW <= 0 || rectH <= 0) return;
 
-            Cv2.Rectangle(frame, new OpenCvSharp.Rect(rectX, rectY, rectW, rectH), bg, -1);
+            Cv2.Rectangle(frame, new CvRect(rectX, rectY, rectW, rectH), bg, -1);
             Cv2.PutText(frame, text, new CvPoint(rectX + pad, rectY + rectH - baseLine - pad),
                         HersheyFonts.HersheySimplex, scale, fg, 1, LineTypes.AntiAlias);
         }
@@ -704,12 +709,12 @@ namespace WpfApp1.ViewModels
             if (_laneAnalysisStable != null)
                 _laneAnalyzer.DrawOnFrame(frame, _laneAnalysisStable);
 
-            // 4) Vehicles -> (1줄:속도+모델명 / 2줄:Car|Lane)
+            // 4) Vehicles -> labels
             foreach (var d in _currentDetections)
             {
                 if (!_trackedObjects.TryGetValue(d.TrackId, out var track)) continue;
 
-                // 기존 속도 로직 유지(너 코드)
+                // 속도 표시(기존 로직 유지)
                 double kmh = track.RelativeSpeed * 8.5;
                 if (kmh > 130) kmh = 110;
 
@@ -727,16 +732,15 @@ namespace WpfApp1.ViewModels
 
                 Cv2.Rectangle(frame, d.Box, Scalar.Yellow, 2);
 
-                // ✅ 모델명 (trackId 캐시에서)
-                _modelCache.TryGetValue(d.TrackId, out var modelName);
-                modelName ??= "";
+                // ✅ 모델명은 modelStates에서 꺼낸다(없으면 빈칸)
+                string modelName = "";
+                if (_modelStates.TryGetValue(d.TrackId, out var ms) && !string.IsNullOrWhiteSpace(ms.Name))
+                    modelName = ms.Name;
 
-                // ✅ 1줄: "속도 + 모델명"
-                string line1 = $"{kmh:0.0}km/h";
-                if (!string.IsNullOrWhiteSpace(modelName))
-                    line1 += $"  {modelName}";
+                // 1줄: 속도 + 모델명
+                string line1 = $"{kmh:0.0}km/h {modelName}".Trim();
 
-                // ✅ 2줄: "Car/Truck/Bus | Lane:#"
+                // 2줄: Car/Bus/Truck + Lane
                 string typeText = GetTypeName(d.ClassId);
                 string laneText = (stableLane > 0) ? $"Lane:{stableLane}" : "Lane:?";
                 string line2 = $"{typeText} | {laneText}";
@@ -777,8 +781,12 @@ namespace WpfApp1.ViewModels
                     _trackedObjects.Clear();
                     _laneStates.Clear();
 
-                    _modelCache.Clear();
-                    _modelLastInferMs.Clear();
+                    // 모델 분류 상태 초기화
+                    _modelStates.Clear();
+                    while (_modelQueue.TryDequeue(out var job))
+                    {
+                        try { job.crop.Dispose(); } catch { }
+                    }
 
                     Ui(() =>
                     {
@@ -815,6 +823,9 @@ namespace WpfApp1.ViewModels
             _dbCts?.Cancel();
             _dbCts = null;
 
+            _modelCts?.Cancel();
+            _modelCts = null;
+
             Stop();
             _frame.Dispose();
             _detector?.Dispose();
@@ -827,9 +838,12 @@ namespace WpfApp1.ViewModels
             _laneAnalysisStable = null;
 
             try { _classSession?.Dispose(); } catch { }
+            _classSession = null;
         }
 
+        // =========================
         // DB Worker
+        // =========================
         private void StartDbWorker()
         {
             if (_dbCts != null) return;
@@ -866,7 +880,146 @@ namespace WpfApp1.ViewModels
             }, token);
         }
 
+        // =========================
+        // ✅ Model Worker (best.onnx)
+        // =========================
+        private void StartModelWorker()
+        {
+            if (_modelCts != null) return;
+
+            _modelCts = new CancellationTokenSource();
+            var token = _modelCts.Token;
+
+            Task.Run(async () =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        if (_classSession == null)
+                        {
+                            await Task.Delay(300, token);
+                            continue;
+                        }
+
+                        if (_modelQueue.TryDequeue(out var job))
+                        {
+                            string name = "";
+                            try
+                            {
+                                name = GetSpecificCarModel(job.crop);
+                            }
+                            catch { name = ""; }
+                            finally
+                            {
+                                try { job.crop.Dispose(); } catch { }
+                            }
+
+                            var st = _modelStates.GetOrAdd(job.trackId, _ => new ModelState());
+                            st.Name = (name ?? "").Trim();
+                        }
+                        else
+                        {
+                            await Task.Delay(8, token);
+                        }
+                    }
+                    catch
+                    {
+                        await Task.Delay(100, token);
+                    }
+                }
+            }, token);
+        }
+
+        private string GetSpecificCarModel(Mat cropImg)
+        {
+            try
+            {
+                if (_classSession == null) return "";
+
+                // 입력 메타(보통 1x3x160x160)
+                var inputName = _classSession.InputMetadata.Keys.First();
+                var dims = _classSession.InputMetadata[inputName].Dimensions.ToArray();
+                if (dims.Length < 4) return "";
+
+                int H = (dims[2] > 0) ? dims[2] : 160;
+                int W = (dims[3] > 0) ? dims[3] : 160;
+
+                using var rgbImg = new Mat();
+                Cv2.CvtColor(cropImg, rgbImg, ColorConversionCodes.BGR2RGB);
+
+                using var resized = new Mat();
+                Cv2.Resize(rgbImg, resized, new CvSize(W, H));
+
+                var input = new DenseTensor<float>(new[] { 1, 3, H, W });
+
+                for (int y = 0; y < H; y++)
+                {
+                    for (int x = 0; x < W; x++)
+                    {
+                        var p = resized.At<Vec3b>(y, x); // RGB
+                        input[0, 0, y, x] = p.Item0 / 255f;
+                        input[0, 1, y, x] = p.Item1 / 255f;
+                        input[0, 2, y, x] = p.Item2 / 255f;
+                    }
+                }
+
+                lock (_classLock)
+                {
+                    using var results = _classSession.Run(new[]
+                    {
+                        NamedOnnxValue.CreateFromTensor(inputName, input)
+                    });
+
+                    var first = results.First();
+
+                    // float 출력 우선 시도
+                    try
+                    {
+                        var tf = first.AsTensor<float>();
+                        var scores = tf.ToArray();
+
+                        int bestIdx = 0;
+                        float best = scores[0];
+                        for (int i = 1; i < scores.Length; i++)
+                        {
+                            if (scores[i] > best) { best = scores[i]; bestIdx = i; }
+                        }
+
+                        if (_carModelNames != null && _carModelNames.Length > bestIdx)
+                            return _carModelNames[bestIdx];
+
+                        return $"Model#{bestIdx}";
+                    }
+                    catch
+                    {
+                        // float이 아니면 long 시도
+                        var tl = first.AsTensor<long>();
+                        var scores = tl.ToArray();
+
+                        int bestIdx = 0;
+                        long best = scores[0];
+                        for (int i = 1; i < scores.Length; i++)
+                        {
+                            if (scores[i] > best) { best = scores[i]; bestIdx = i; }
+                        }
+
+                        if (_carModelNames != null && _carModelNames.Length > bestIdx)
+                            return _carModelNames[bestIdx];
+
+                        return $"Model#{bestIdx}";
+                    }
+                }
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        // =========================
         // Speed/DB helpers
+        // =========================
         private void UpdateSpeedAndDirection(TrackedObject track)
         {
             // 필요 시 확장
@@ -903,101 +1056,5 @@ namespace WpfApp1.ViewModels
             }
             catch { }
         }
-
-        // ✅ 차량 모델명 분류 (입/출력 shape 자동 대응 + float/int64 대응)
-        private string GetSpecificCarModel(Mat cropImg)
-        {
-            try
-            {
-                if (_classSession == null) return "";
-
-                // 입력 메타
-                var inputName = _classSession.InputMetadata.Keys.First();
-                var dims = _classSession.InputMetadata[inputName].Dimensions.ToArray(); // 보통 [1,3,H,W]
-                if (dims.Length < 4) return "";
-
-                int H = (dims[2] > 0) ? dims[2] : 160;
-                int W = (dims[3] > 0) ? dims[3] : 160;
-
-                using var rgbImg = new Mat();
-                Cv2.CvtColor(cropImg, rgbImg, ColorConversionCodes.BGR2RGB);
-
-                using var resized = new Mat();
-                Cv2.Resize(rgbImg, resized, new OpenCvSharp.Size(W, H));
-
-                var input = new DenseTensor<float>(new[] { 1, 3, H, W });
-
-                for (int y = 0; y < H; y++)
-                {
-                    for (int x = 0; x < W; x++)
-                    {
-                        var p = resized.At<Vec3b>(y, x); // RGB
-                        input[0, 0, y, x] = p.Item0 / 255f;
-                        input[0, 1, y, x] = p.Item1 / 255f;
-                        input[0, 2, y, x] = p.Item2 / 255f;
-                    }
-                }
-
-                lock (_classLock)
-                {
-                    using var results = _classSession.Run(new[]
-                    {
-                NamedOnnxValue.CreateFromTensor(inputName, input)
-            });
-
-                    var first = results.First();
-
-                    // ✅ 1) float 출력 먼저 시도
-                    try
-                    {
-                        var tf = first.AsTensor<float>();
-                        var outDims = tf.Dimensions.ToArray();
-                        if (outDims.Length != 2 || outDims[0] != 1) return "";
-
-                        int n = outDims[1];
-                        var scores = tf.ToArray();
-
-                        int bestIdx = 0;
-                        float best = scores[0];
-                        for (int i = 1; i < scores.Length; i++)
-                        {
-                            if (scores[i] > best) { best = scores[i]; bestIdx = i; }
-                        }
-
-                        if (_carModelNames != null && _carModelNames.Length > bestIdx)
-                            return _carModelNames[bestIdx];
-
-                        return $"Model#{bestIdx}";
-                    }
-                    catch
-                    {
-                        // ✅ 2) float이 아니면 long 출력 시도
-                        var tl = first.AsTensor<long>();
-                        var outDims = tl.Dimensions.ToArray();
-                        if (outDims.Length != 2 || outDims[0] != 1) return "";
-
-                        int n = outDims[1];
-                        var scores = tl.ToArray();
-
-                        int bestIdx = 0;
-                        long best = scores[0];
-                        for (int i = 1; i < scores.Length; i++)
-                        {
-                            if (scores[i] > best) { best = scores[i]; bestIdx = i; }
-                        }
-
-                        if (_carModelNames != null && _carModelNames.Length > bestIdx)
-                            return _carModelNames[bestIdx];
-
-                        return $"Model#{bestIdx}";
-                    }
-                }
-            }
-            catch
-            {
-                return "ERR";
-            }
-        }
-
     }
 }
