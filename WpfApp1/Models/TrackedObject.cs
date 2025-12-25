@@ -1,110 +1,93 @@
-﻿using OpenCvSharp;
-using System;
-using System.Collections.Generic;
+﻿using System;
+using OpenCvSharp;
 
-namespace WpfApp1.Scripts
+namespace WpfApp1.Models
 {
     public class TrackedObject
     {
-        private static int _nextId = 1;
-        public int Id { get; }
-        public Rect LastBox { get; set; }
-        public double LastTimeMs { get; set; }
+        public int Id { get; set; }
         public int LastClassId { get; set; }
-        public string? ClassName { get; set; }
-        public string FirstDetectedTime { get; }
+        public Rect LastBox { get; set; }
+        public double LastTime { get; set; }
+        public string FirstDetectedTime { get; set; }
+        public int UpdateCount { get; set; }
         public double SpeedInKmh { get; private set; }
-        public int MissedFrames { get; private set; }
-        public int UpdateCount { get; private set; } = 0;
+        public int CurrentLane { get; set; } = -1;
+        private int _lastLane = -1; // 이전 차선 저장용
+        private bool _isLaneChanged = false; // 차선 변경 여부 플래그
+        public string Direction { get; set; } = "Unknown";
+        public string ClassName { get; set; }
 
-        public bool HasExceededSpeed { get; private set; } = false;
-        public int PreviousLane { get; private set; } = -1;
-        public int CurrentLane { get; private set; } = -1;
-        public string Direction { get; set; } = "F";
-        public int FramesInFirstLane { get; private set; } = 0;
+        private Point2f _lastPos;
+        private int _missedFrames = 0;
+        public bool ShouldBeDeleted => _missedFrames > 10;
 
-        public bool ShouldBeDeleted => MissedFrames > 15;
-
-        public TrackedObject(int classId, Rect box, double timeMs, string? className = null)
+        public TrackedObject(int classId, Rect box, double time, string className)
         {
-            Id = _nextId++;
+            Id = new Random().Next(1000, 9999);
             LastClassId = classId;
             LastBox = box;
-            LastTimeMs = timeMs;
+            LastTime = time;
             ClassName = className;
             FirstDetectedTime = DateTime.Now.ToString("HH:mm:ss");
-            MissedFrames = 0;
-            SpeedInKmh = 0;
+            _lastPos = new Point2f(box.X + box.Width / 2, box.Y + box.Height / 2);
         }
 
-        public void Update(int classId, Rect newBox, double newTimeMs, int newLane)
+        public void Update(int classId, Rect box, double time, int lane)
         {
-            double dt = (newTimeMs - LastTimeMs) / 1000.0;
-            if (dt > 0.01 && dt < 0.5)
+            double dt = (time - LastTime) / 1000.0;
+            if (dt > 0)
             {
-                double dx = newBox.X - LastBox.X;
-                double dy = newBox.Y - LastBox.Y;
-                double pixelDist = Math.Sqrt(dx * dx + dy * dy);
+                Point2f currPos = new Point2f(box.X + box.Width / 2, box.Y + box.Height / 2);
+                double dist = Math.Sqrt(Math.Pow(currPos.X - _lastPos.X, 2) + Math.Pow(currPos.Y - _lastPos.Y, 2));
 
-                double yRatio = (double)(newBox.Y + newBox.Height) / 720.0;
-                double perspectiveWeight = 0.8 + (yRatio * 0.7);
-                double highwayScale = 0.65;
+                // 픽셀 거리 기반 속도 추정
+                double speed = (dist / dt) * 0.2;
+                SpeedInKmh = (SpeedInKmh * 0.8) + (speed * 0.2);
 
-                double calculatedSpeed = (pixelDist / dt) * highwayScale * perspectiveWeight;
-
-                if (calculatedSpeed > 220) calculatedSpeed = SpeedInKmh > 0 ? SpeedInKmh : 100;
-
-                // EMA 필터: 속도 안정화
-                if (UpdateCount < 10) SpeedInKmh = calculatedSpeed;
-                else SpeedInKmh = (SpeedInKmh * 0.9) + (calculatedSpeed * 0.1);
-
-                // 차종 안정화 (진입 시 오인식 방지)
-                if (UpdateCount < 30) LastClassId = classId;
-
-                // 과속 확정 플래그 (안정화 후 120km/h 초과 시)
-                if (UpdateCount > 25 && SpeedInKmh >= 120) HasExceededSpeed = true;
-
-                UpdateCount++;
+                _lastPos = currPos;
             }
 
-            if (newLane != -1)
+            // 차선 변경 감지 로직
+            if (lane != -1 && _lastLane != -1 && _lastLane != lane)
             {
-                if (CurrentLane != -1 && CurrentLane != newLane)
-                {
-                    PreviousLane = CurrentLane;
-                    Direction = (newLane < CurrentLane) ? "L" : "R";
-                }
-                CurrentLane = newLane;
-                if (CurrentLane == 1) FramesInFirstLane++;
-                else FramesInFirstLane = 0;
+                _isLaneChanged = true;
             }
 
-            LastBox = newBox;
-            LastTimeMs = newTimeMs;
-            MissedFrames = 0;
+            if (lane != -1) _lastLane = lane; // 유효한 차선일 때만 갱신
+
+            LastClassId = classId;
+            LastBox = box;
+            LastTime = time;
+            CurrentLane = lane;
+            UpdateCount++;
+            _missedFrames = 0;
         }
+
+        public void Missed() => _missedFrames++;
 
         public string CheckViolation()
         {
-            // [중요] 속도가 100 미만이면 과거 기록 상관없이 무조건 "정상" (17.7km/h 과속 방지)
-            if (UpdateCount < 25 || SpeedInKmh < 100) return "정상";
+            string type = GetTypeName(LastClassId);
 
-            List<string> violations = new List<string>();
+            // 1. 트럭, 버스, 화물차 차선 변경 위반 (요청 사항)
+            if ((type == "TRUCK" || type == "BUS" || type == "Vehicle") && _isLaneChanged)
+            {
+                return "대형차 차선변경 위반";
+            }
 
-            // 1. 과속 판정
-            if (HasExceededSpeed || SpeedInKmh >= 120) violations.Add("과속");
+            // 2. 대형차 1차선 진입 금지 (기존 지정차선 위반)
+            if ((type == "TRUCK" || type == "BUS") && CurrentLane == 1)
+            {
+                return "지정차선 위반";
+            }
 
-            // 2. 1차로 정속주행 (1차로 알박기)
-            if (CurrentLane == 1 && FramesInFirstLane > 300 && SpeedInKmh < 100)
-                violations.Add("1차로 정속주행");
+            // 3. 과속 위반 (예시)
+            if (SpeedInKmh > 110) return "과속 위반";
 
-            // 3. 지정차로 위반 (트럭/버스 하위차로 미준수)
-            if ((LastClassId == 5 || LastClassId == 7) && CurrentLane == 1)
-                violations.Add("지정차로 위반(상위차로 진입)");
-
-            return violations.Count > 0 ? string.Join(", ", violations) : "정상";
+            return "정상";
         }
 
-        public void Missed() => MissedFrames++;
+        private string GetTypeName(int id) => id switch { 2 => "CAR", 5 => "BUS", 7 => "TRUCK", _ => "Vehicle" };
     }
 }

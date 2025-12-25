@@ -67,11 +67,11 @@
                 <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
                     <StackPanel Margin="0,0,12,0">
                         <TextBlock Text="전체 차선" Foreground="#888" FontSize="9" HorizontalAlignment="Center" Margin="0,0,0,2"/>
-                        <ComboBox Style="{StaticResource DarkCombo}" Width="55" ItemsSource="{Binding TotalLaneOptions}" SelectedItem="{Binding TotalLanes, Mode=TwoWay}"/>
+                        <ComboBox Style="{StaticResource DarkCombo}" Width="55" ItemsSource="{Binding TotalLaneOptions}" SelectedItem="{Binding TotalLanes, Mode=TwoWay}" FontWeight="Bold"/>
                     </StackPanel>
                     <StackPanel>
                         <TextBlock Text="분석 차선" Foreground="#888" FontSize="9" HorizontalAlignment="Center" Margin="0,0,0,2"/>
-                        <ComboBox Style="{StaticResource DarkCombo}" Width="55" ItemsSource="{Binding CurrentLaneOptions}" SelectedItem="{Binding CurrentLane, Mode=TwoWay}"/>
+                        <ComboBox Style="{StaticResource DarkCombo}" Width="55" ItemsSource="{Binding CurrentLaneOptions}" SelectedItem="{Binding CurrentLane, Mode=TwoWay}" FontWeight="Bold"/>
                     </StackPanel>
                 </StackPanel>
             </Grid>
