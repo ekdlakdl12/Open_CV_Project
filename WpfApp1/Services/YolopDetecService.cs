@@ -1,20 +1,41 @@
 ﻿using System;
 using OpenCvSharp;
-using WpfApp1.Script;
 
-namespace WpfApp1.Services
+namespace WpfApp1.Scripts
 {
-    public sealed class YolopDetectService : IDisposable
+    public struct YolopResult : IDisposable
     {
-        private readonly YolopOnnx _yolop;
+        public Mat DrivableMaskOrig { get; set; }
+        public Mat LaneProbOrig { get; set; }
 
-        public YolopDetectService(string onnxPath, int imgSize = 640, float conf = 0.35f, float nms = 0.45f)
+        public void Dispose()
         {
-            _yolop = new YolopOnnx(onnxPath, imgSize, conf, nms);
+            DrivableMaskOrig?.Dispose();
+            LaneProbOrig?.Dispose();
         }
+    }
 
-        public YolopOnnx.YolopResult Infer(Mat frame) => _yolop.Infer(frame);
+    public class YolopDetectService
+    {
+        // 실제 추론을 위한 세션 변수들이 여기에 있어야 합니다.
+        // 여기서는 구조를 잡기 위해 결과 Mat을 생성하는 로직을 넣습니다.
 
-        public void Dispose() => _yolop.Dispose();
+        public YolopDetectService(string modelPath, int size, float conf, float iou) { }
+
+        public YolopResult Infer(Mat frame)
+        {
+            // [중요] 여기서 실제 ONNX 추론 결과가 Mat으로 생성되어야 합니다.
+            // 테스트를 위해 프레임 크기와 동일한 빈 Mat을 생성하여 반환하는 구조입니다.
+            // 실제 구현부에서는 모델의 Output Tensor를 Mat으로 변환하는 코드가 작동해야 합니다.
+
+            Mat driveMask = new Mat(frame.Size(), MatType.CV_8UC1, Scalar.All(0));
+            Mat laneProb = new Mat(frame.Size(), MatType.CV_32FC1, Scalar.All(0));
+
+            return new YolopResult
+            {
+                DrivableMaskOrig = driveMask,
+                LaneProbOrig = laneProb
+            };
+        }
     }
 }

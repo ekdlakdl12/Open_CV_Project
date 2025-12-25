@@ -23,7 +23,6 @@ namespace WpfApp1.Services
             return _cap.Read(frame) && !frame.Empty();
         }
 
-        // ✅ 처리 지연 시 프레임을 n개 “Grab”해서 스킵 (Decode/Render 안 함)
         public void GrabFrames(int n)
         {
             if (_cap == null || n <= 0) return;

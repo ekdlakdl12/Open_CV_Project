@@ -1,21 +1,14 @@
 ﻿using OpenCvSharp;
-using WpfApp1.Models;
-using System;
-using System.Collections.Generic;
 
-namespace WpfApp1.Services
+namespace WpfApp1.Scripts
 {
-    public class YoloDetectService : IDisposable
+    public class YoloDetectService
     {
-        private readonly YoloV8Onnx _yolo;
-
-        public YoloDetectService(string onnxPath, int imgSize = 640, float conf = 0.5f, float nms = 0.45f)
+        public YoloDetectService(string modelPath, int size, float conf, float iou) { }
+        // ... 나머지 로직
+        public IEnumerable<WpfApp1.Models.Detection> Detect(Mat frame)
         {
-            _yolo = new YoloV8Onnx(onnxPath, imgSize, conf, nms);
+            return new List<WpfApp1.Models.Detection>();
         }
-
-        public List<Detection> Detect(Mat frame) => _yolo.Detect(frame);
-
-        public void Dispose() => _yolo.Dispose();
     }
 }
