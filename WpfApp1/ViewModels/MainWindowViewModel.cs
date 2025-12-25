@@ -103,8 +103,8 @@ namespace WpfApp1.ViewModels
 
         public ObservableCollection<int> TotalLaneOptions { get; } = new() { 1, 2, 3, 4, 5, 6 };
         public ObservableCollection<int> CurrentLaneOptions { get; } = new() { 1, 2, 3, 4, 5, 6 };
-        public int TotalLanes { get; set; } = 3;
-        public int CurrentLane { get; set; } = 2;
+        public int TotalLanes { get; set; } = 5;
+        public int CurrentLane { get; set; } = 4;
 
         private int _countL = 0, _countF = 0, _countR = 0;
         private readonly HashSet<int> _countedIds = new();

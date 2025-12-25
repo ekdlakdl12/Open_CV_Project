@@ -1,4 +1,11 @@
-﻿using OpenCvSharp;
+﻿// LaneAnalyzer.cs (API-compatible with Merge_Car_DBlogic_Test)
+// - Keep current project signatures:
+//   Analyze(Mat laneProb, Size frameSize) -> bool
+//   DrawOnFrame(Mat frame) -> void
+//   TryGetLaneNumberForPoint(Point p) -> int
+// - Internals: use VANISHING-POINT perspective boundaries (Merge_Carmodel_Lane_Test style)
+
+using OpenCvSharp;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -8,56 +15,71 @@ namespace WpfApp1.Scripts
     public sealed class LaneAnalyzer
     {
         // =========================
-        // Public tuning params
+        // Public tuning params (keep)
         // =========================
         public int TotalLanes { get; set; } = 5;   // 2..8
         public int EgoLane { get; set; } = 3;      // 1..TotalLanes
 
-        // ROI start (상단으로 올릴수록 "앞쪽(원근)" 위주)
-        public float RoiYStartRatio { get; set; } = 0.55f;
+        // ROI
+        public float RoiYStartRatio { get; set; } = 0.52f;
+        public float RoiXMarginRatio { get; set; } = 0.02f;
 
-        // 선을 더 "눕히는" 느낌(원근 상단 y)
-        public float VanishYRatio { get; set; } = 0.20f;
+        public float LaneProbThreshold { get; set; } = 0.45f;
 
-        // Ego 폭 스케일
-        public float EgoLaneWidthScale { get; set; } = 1.5f;
+        // drivable gate
+        public bool UseDrivableGate { get; set; } = true;
+        public int GateErodeK { get; set; } = 9;
 
-        public float LaneProbThreshold { get; set; } = 0.35f;
-        public int MinCorridorWidthPx { get; set; } = 80;
+        // lane mask morph
+        public int LaneMaskOpenK { get; set; } = 3;
+        public int LaneMaskCloseK { get; set; } = 5;
 
-        // 추적 세팅 (핵심)
-        public int TraceStepPx { get; set; } = 18;          // 위로 올라가며 샘플링 간격
-        public int TraceWindowPx { get; set; } = 48;        // x 탐색 윈도우(+/-)
-        public int TraceSmoothing { get; set; } = 5;        // ego trace smoothing
+        // sampling / peak
+        public int SampleBandCount { get; set; } = 18;
+        public float SampleYTopRatio { get; set; } = 0.30f;
+        public float SampleYBottomRatio { get; set; } = 0.95f;
 
-        // boundary smoothing (전체 xs 안정화)
-        public int SmoothHistory { get; set; } = 5;
+        public int PeakMinStrength { get; set; } = 6;
+        public int PeakMinGapPx { get; set; } = 18;
 
-        // Results
+        public int ExpectedWindowPx { get; set; } = 90;
+        public int FollowWindowPx { get; set; } = 75;
+
+        // Debug
+        public bool DebugDrawPeakDots { get; set; } = false;
+        public bool DebugDrawCandidatePolylines { get; set; } = false;
+        public bool DebugDrawVanishingPoint { get; set; } = false;
+
+        // =========================
+        // Exposed (keep current-style)
+        // =========================
         public IReadOnlyList<Point[]> LaneBoundaries => _laneBoundaries;
-
-        private Mat? _drivableMask; // 0/255
         private readonly List<Point[]> _laneBoundaries = new();
-        private readonly Queue<int[]> _historyX = new();
 
-        // ego boundary x (bottom 기준) 추적 안정화
-        private int _prevEgoLeftX = -1;
-        private int _prevEgoRightX = -1;
+        // =========================
+        // Internal masks / state
+        // =========================
+        private Mat? _drivableMaskOrig; // expected 0/255 (same size as frame)
+        private LaneAnalysisResult? _last;
 
-        public void SetDrivableMask(Mat? drivableMask)
+        public void SetDrivableMask(Mat? drivableMaskOrig)
         {
-            _drivableMask?.Dispose();
-            _drivableMask = drivableMask?.Clone();
+            _drivableMaskOrig?.Dispose();
+            _drivableMaskOrig = drivableMaskOrig?.Clone();
         }
 
+        // =========================
+        // API-compatible Analyze
+        // =========================
         public bool Analyze(Mat laneProb, Size frameSize)
         {
             if (laneProb == null || laneProb.Empty()) return false;
-            if (TotalLanes < 1) return false;
+            if (frameSize.Width <= 0 || frameSize.Height <= 0) return false;
 
             Mat lp = laneProb;
             Mat? resized = null;
 
+            // ensure laneProb matches frame size
             if (laneProb.Width != frameSize.Width || laneProb.Height != frameSize.Height)
             {
                 resized = new Mat();
@@ -67,182 +89,34 @@ namespace WpfApp1.Scripts
 
             try
             {
-                int yStart = (int)(frameSize.Height * RoiYStartRatio);
-                yStart = Math.Clamp(yStart, 0, frameSize.Height - 2);
-
-                var roiRect = new Rect(0, yStart, frameSize.Width, frameSize.Height - yStart);
-                using var lpRoi = new Mat(lp, roiRect);
-
-                // laneProb -> 8U (0..255)
-                using var lp8u = new Mat();
-                if (lpRoi.Type() == MatType.CV_32FC1 || lpRoi.Type() == MatType.CV_32F)
-                    lpRoi.ConvertTo(lp8u, MatType.CV_8UC1, 255.0);
-                else if (lpRoi.Type() == MatType.CV_8UC1)
-                    lpRoi.CopyTo(lp8u);
+                // ensure float32 1ch
+                using var lp32 = new Mat();
+                if (lp.Type() == MatType.CV_32FC1 || lp.Type() == MatType.CV_32F)
+                    lp.CopyTo(lp32);
+                else if (lp.Type() == MatType.CV_8UC1)
+                    lp.ConvertTo(lp32, MatType.CV_32FC1, 1.0 / 255.0);
                 else
-                    Cv2.CvtColor(lpRoi, lp8u, ColorConversionCodes.BGR2GRAY);
-
-                // threshold -> binary
-                using var bin = new Mat();
-                Cv2.Threshold(lp8u, bin, LaneProbThreshold * 255.0, 255, ThresholdTypes.Binary);
-
-                // drivable gate
-                if (_drivableMask != null && !_drivableMask.Empty()
-                    && _drivableMask.Width == frameSize.Width && _drivableMask.Height == frameSize.Height)
                 {
-                    using var driveRoi = new Mat(_drivableMask, roiRect);
-                    Cv2.BitwiseAnd(bin, driveRoi, bin);
+                    using var gray = new Mat();
+                    Cv2.CvtColor(lp, gray, ColorConversionCodes.BGR2GRAY);
+                    gray.ConvertTo(lp32, MatType.CV_32FC1, 1.0 / 255.0);
                 }
 
-                int w = bin.Width;
-                int h = bin.Height;
+                _last?.DisposeMats();
+                _last = AnalyzeCore(lp32, frameSize.Width, frameSize.Height);
 
-                // corridor from drivable (fallback full)
-                int leftCorr = 0, rightCorr = w - 1;
-                if (_drivableMask != null && !_drivableMask.Empty()
-                    && _drivableMask.Width == frameSize.Width && _drivableMask.Height == frameSize.Height)
-                {
-                    using var driveRoi = new Mat(_drivableMask, roiRect);
-                    int[] cols = ReduceColumnSumToInt(driveRoi);
-
-                    int thr = Math.Max(5, h / 50);
-                    leftCorr = 0;
-                    while (leftCorr < w && cols[leftCorr] < thr) leftCorr++;
-                    rightCorr = w - 1;
-                    while (rightCorr >= 0 && cols[rightCorr] < thr) rightCorr--;
-
-                    if (rightCorr - leftCorr < MinCorridorWidthPx)
-                    {
-                        leftCorr = 0;
-                        rightCorr = w - 1;
-                    }
-                }
-
-                // initial xs: evenly split corridor
-                int boundaryCount = TotalLanes + 1;
-                int[] xs = new int[boundaryCount];
-                for (int i = 0; i < boundaryCount; i++)
-                {
-                    float t = (float)i / (boundaryCount - 1);
-                    xs[i] = (int)(leftCorr + t * (rightCorr - leftCorr));
-                }
-
-                int egoL = Math.Clamp(EgoLane - 1, 0, boundaryCount - 2);
-                int egoR = egoL + 1;
-
-                // ---- Ego boundary seed: bottom band histogram ----
-                // bin의 "아래쪽 일부"만 사용해서 seed 잡기 (근거리 노이즈 완화)
-                int seedBandH = Math.Clamp(h / 5, 40, 140);
-                using var bottomBand = new Mat(bin, new Rect(0, h - seedBandH, w, seedBandH));
-                int[] hist = ReduceColumnSumToInt(bottomBand);
-
-                // peaks
-                int[] peaks = FindPeaks(hist, leftCorr, rightCorr, maxPeaks: 8, minDistance: 35);
-
-                // expected from previous (follow)
-                int expectL = (_prevEgoLeftX > 0) ? _prevEgoLeftX : xs[egoL];
-                int expectR = (_prevEgoRightX > 0) ? _prevEgoRightX : xs[egoR];
-
-                int bestL = (peaks.Length > 0) ? NearestPeakWithin(peaks, expectL, TraceWindowPx) : -1;
-                int bestR = (peaks.Length > 0) ? NearestPeakWithin(peaks, expectR, TraceWindowPx) : -1;
-
-                if (bestL < 0 && peaks.Length > 0) bestL = NearestPeak(peaks, expectL);
-                if (bestR < 0 && peaks.Length > 0) bestR = NearestPeak(peaks, expectR);
-
-                // 못 찾으면 corridor 등분값으로
-                if (bestL <= 0) bestL = xs[egoL];
-                if (bestR <= 0) bestR = xs[egoR];
-
-                // 폭 스케일 보정
-                int mid = (bestL + bestR) / 2;
-                int half = Math.Max(20, (int)(Math.Abs(bestR - bestL) * 0.5f * EgoLaneWidthScale));
-                int egoLeftSeed = Math.Clamp(mid - half, leftCorr, rightCorr);
-                int egoRightSeed = Math.Clamp(mid + half, leftCorr, rightCorr);
-
-                // ---- Ego boundary trace: bottom->top follow peaks ----
-                var egoLeftTrace = TraceBoundaryX(bin, egoLeftSeed, TraceWindowPx, TraceStepPx);
-                var egoRightTrace = TraceBoundaryX(bin, egoRightSeed, TraceWindowPx, TraceStepPx);
-
-                // smoothing trace
-                SmoothTraceInPlace(egoLeftTrace, TraceSmoothing);
-                SmoothTraceInPlace(egoRightTrace, TraceSmoothing);
-
-                // bottom x from trace (y=h-1)
-                int egoLeftBottom = egoLeftTrace.Count > 0 ? egoLeftTrace[0].x : egoLeftSeed;
-                int egoRightBottom = egoRightTrace.Count > 0 ? egoRightTrace[0].x : egoRightSeed;
-
-                xs[egoL] = Math.Clamp(egoLeftBottom, leftCorr, rightCorr);
-                xs[egoR] = Math.Clamp(egoRightBottom, leftCorr, rightCorr);
-
-                // corridor 재분배 (ego를 기준으로 좌/우 등분)
-                int leftBoundaries = egoL;
-                for (int i = 0; i < leftBoundaries; i++)
-                {
-                    float t = (float)i / Math.Max(1, leftBoundaries);
-                    xs[i] = (int)(leftCorr + t * (xs[egoL] - leftCorr));
-                }
-                int rightBoundaries = boundaryCount - 1 - egoR;
-                for (int k = 1; k <= rightBoundaries; k++)
-                {
-                    float t = (float)k / Math.Max(1, rightBoundaries);
-                    xs[egoR + k] = (int)(xs[egoR] + t * (rightCorr - xs[egoR]));
-                }
-
-                // boundary smoothing (bottom 기준 안정화)
-                PushHistory(xs);
-                xs = AverageHistory();
-
-                // boundary monotonic fix (교차/역전 방지)
-                for (int i = 1; i < xs.Length; i++)
-                {
-                    if (xs[i] <= xs[i - 1] + 6) xs[i] = xs[i - 1] + 6;
-                }
-                for (int i = 0; i < xs.Length; i++)
-                {
-                    xs[i] = Math.Clamp(xs[i], leftCorr, rightCorr);
-                }
-
-                // ego 최소폭 보장 (너무 좁아지면 mid 기준으로 다시 벌림)
-                int minEgoWidth = 60;
-                if (xs[egoR] - xs[egoL] < minEgoWidth)
-                {
-                    int m2 = (xs[egoL] + xs[egoR]) / 2;
-                    xs[egoL] = Math.Clamp(m2 - minEgoWidth / 2, leftCorr, rightCorr);
-                    xs[egoR] = Math.Clamp(m2 + minEgoWidth / 2, leftCorr, rightCorr);
-                }
-
-
-                // prev update
-                _prevEgoLeftX = xs[egoL];
-                _prevEgoRightX = xs[egoR];
-
-                // ---- Build final boundary polylines in full-frame coordinates ----
-                // ---- Build final boundary polylines in full-frame coordinates ----
+                // keep LaneBoundaries list (frame coords) for any other code
                 _laneBoundaries.Clear();
+                if (_last.BoundaryPolylinesFrame != null)
+                    _laneBoundaries.AddRange(_last.BoundaryPolylinesFrame);
 
-                int yBottomFull = frameSize.Height - 1;
-                int yVanishFull = yStart + (int)((frameSize.Height - yStart) * VanishYRatio);
-                yVanishFull = Math.Clamp(yVanishFull, yStart, frameSize.Height - 2);
-
-                // 모든 boundary를 "직선 3-point"로 통일 (ego도 직선화)
-                for (int b = 0; b < boundaryCount; b++)
-                {
-                    int xBottom = xs[b];
-
-                    // 위쪽으로 갈수록 화면 중앙(소실점)쪽으로 모이게
-                    // (Merge_Carmodel_Lane_Test처럼 곧은 선 느낌)
-                    int xTop = (int)Lerp(xs[b], frameSize.Width / 2f, 0.35f);
-
-                    _laneBoundaries.Add(new[]
-                    {
-                        new Point(xBottom, yBottomFull),
-                        new Point((xBottom + xTop) / 2, (yBottomFull + yVanishFull) / 2),
-                        new Point(xTop, yVanishFull)
-                    });
-                }
-
-                return _laneBoundaries.Count >= 2;
-
+                return _last.Boundaries != null && _last.Boundaries.Count == Math.Clamp(TotalLanes, 2, 8) + 1;
+            }
+            catch
+            {
+                _last = null;
+                _laneBoundaries.Clear();
+                return false;
             }
             finally
             {
@@ -250,205 +124,615 @@ namespace WpfApp1.Scripts
             }
         }
 
+        // =========================
+        // API-compatible Draw
+        // =========================
         public void DrawOnFrame(Mat frame)
         {
-            if (_laneBoundaries.Count == 0) return;
+            if (frame == null || frame.Empty()) return;
+            if (_last == null) return;
 
-            for (int i = 0; i < _laneBoundaries.Count; i++)
-                Cv2.Polylines(frame, new[] { _laneBoundaries[i] }, false, Scalar.White, 2, LineTypes.AntiAlias);
+            var r = _last;
 
-            for (int lane = 1; lane <= TotalLanes; lane++)
+            Cv2.Rectangle(frame, r.Roi, Scalar.White, 1);
+
+            if (DebugDrawCandidatePolylines && r.CandidatePolylinesFrame != null)
             {
-                int leftIdx = lane - 1;
-                int rightIdx = lane;
-                if (rightIdx >= _laneBoundaries.Count) break;
+                foreach (var pl in r.CandidatePolylinesFrame)
+                    if (pl != null && pl.Length >= 2)
+                        Cv2.Polylines(frame, new[] { pl }, false, new Scalar(0, 0, 255), 1, LineTypes.AntiAlias);
+            }
 
-                var pL = _laneBoundaries[leftIdx][0];
-                var pR = _laneBoundaries[rightIdx][0];
-                int cx = (pL.X + pR.X) / 2;
-                int cy = Math.Min(frame.Height - 15, frame.Height - 40);
+            if (DebugDrawVanishingPoint)
+            {
+                var vpF = new Point((int)Math.Round(r.Roi.X + r.VanishingPointRoi.X),
+                                    (int)Math.Round(r.Roi.Y + r.VanishingPointRoi.Y));
+                Cv2.Circle(frame, vpF, 5, new Scalar(255, 0, 255), -1, LineTypes.AntiAlias);
+                Cv2.PutText(frame, "VP", new Point(vpF.X + 6, vpF.Y - 6),
+                    HersheyFonts.HersheySimplex, 0.6, new Scalar(255, 0, 255), 2);
+            }
 
-                var color = (lane == EgoLane) ? Scalar.Yellow : Scalar.White;
-                Cv2.PutText(frame, $"#{lane}", new Point(cx - 12, cy),
-                    HersheyFonts.HersheySimplex, 0.9, color, 2);
+            if (r.BoundaryPolylinesFrame != null)
+            {
+                foreach (var pl in r.BoundaryPolylinesFrame)
+                {
+                    if (pl == null || pl.Length < 2) continue;
+                    Cv2.Polylines(frame, new[] { pl }, false, Scalar.White, 2, LineTypes.AntiAlias);
+                }
+            }
+
+            // lane labels
+            int total = Math.Clamp(TotalLanes, 2, 8);
+            int yLabelR = (int)(r.Roi.Height * 0.92);
+            yLabelR = Math.Clamp(yLabelR, 0, r.Roi.Height - 1);
+
+            if (r.Boundaries != null && r.Boundaries.Count == total + 1)
+            {
+                for (int lane = 1; lane <= total; lane++)
+                {
+                    var L = r.Boundaries[lane - 1];
+                    var R = r.Boundaries[lane];
+
+                    double xL = L.m * yLabelR + L.b;
+                    double xR = R.m * yLabelR + R.b;
+                    int cx = (int)Math.Round((xL + xR) * 0.5);
+                    cx = Math.Clamp(cx, 0, r.Roi.Width - 1);
+
+                    var pt = new Point(r.Roi.X + cx, r.Roi.Y + yLabelR);
+                    var color = (lane == EgoLane) ? Scalar.Yellow : Scalar.White;
+
+                    Cv2.PutText(frame, $"#{lane}", pt, HersheyFonts.HersheySimplex, 0.9, color, 2, LineTypes.AntiAlias);
+                }
             }
         }
 
-        public int TryGetLaneNumberForPoint(Point p)
+        // =========================
+        // API-compatible point->lane
+        // =========================
+        public int TryGetLaneNumberForPoint(Point pFrame)
         {
-            if (_laneBoundaries.Count < 2) return -1;
+            if (_last == null) return -1;
 
-            // bottom point 기준으로 boundary x를 비교
-            var bx = _laneBoundaries.Select(b => b[0].X).ToArray();
+            var r = _last;
+            int total = Math.Clamp(TotalLanes, 2, 8);
+            if (r.Boundaries == null || r.Boundaries.Count != total + 1) return -1;
+            if (!r.Roi.Contains(pFrame)) return -1;
 
-            for (int lane = 1; lane <= TotalLanes; lane++)
+            int xR = pFrame.X - r.Roi.X;
+            int yR = pFrame.Y - r.Roi.Y;
+
+            var xs = new double[total + 1];
+            for (int i = 0; i <= total; i++)
             {
-                int left = bx[lane - 1];
-                int right = bx[lane];
-                int lo = Math.Min(left, right);
-                int hi = Math.Max(left, right);
-                if (p.X >= lo && p.X < hi) return lane;
+                var ln = r.Boundaries[i];
+                xs[i] = ln.m * yR + ln.b;
             }
-            return -1;
+
+            // monotonic safeguard
+            for (int i = 1; i < xs.Length; i++)
+                if (xs[i] < xs[i - 1] + 2) xs[i] = xs[i - 1] + 2;
+
+            int idx = 0;
+            while (idx < xs.Length && xR >= xs[idx]) idx++;
+
+            return Math.Clamp(idx, 1, total);
         }
 
-        // ============== helpers ==============
-        private static float Lerp(float a, float b, float t) => a + (b - a) * t;
-
-        private static int[] ReduceColumnSumToInt(Mat bin8u)
+        // =========================
+        // Core result (internal)
+        // =========================
+        private sealed class LaneAnalysisResult
         {
-            using var colSum = new Mat();
-            Cv2.Reduce(bin8u, colSum, 0, ReduceTypes.Sum, MatType.CV_32S); // 1 x W
+            public Rect Roi;
+            public int[] SampleYs = Array.Empty<int>();
 
-            int w = bin8u.Width;
-            int[] outArr = new int[w];
-            for (int x = 0; x < w; x++)
+            // boundary lines in ROI coords: x = m*y + b  (count=TotalLanes+1)
+            public List<(double m, double b)> Boundaries = new();
+
+            // drawing
+            public List<Point[]> BoundaryPolylinesFrame = new();
+
+            // debug
+            public List<Point[]> CandidatePolylinesFrame = new();
+            public Point2d VanishingPointRoi;
+
+            public Mat? LaneMaskRoi8u;
+            public Mat? DriveMaskRoi8u;
+
+            public void DisposeMats()
             {
-                int v = colSum.At<int>(0, x);
-                outArr[x] = v / 255;
+                LaneMaskRoi8u?.Dispose(); LaneMaskRoi8u = null;
+                DriveMaskRoi8u?.Dispose(); DriveMaskRoi8u = null;
             }
-            return outArr;
+        }
+
+        // =========================
+        // AnalyzeCore: Merge_Carmodel_Lane_Test style
+        // =========================
+        private LaneAnalysisResult AnalyzeCore(Mat laneProbOrig32f, int frameW, int frameH)
+        {
+            int total = Math.Clamp(TotalLanes, 2, 8);
+            int ego = Math.Clamp(EgoLane, 1, total);
+
+            int y0 = (int)(frameH * RoiYStartRatio);
+            y0 = Math.Clamp(y0, 0, frameH - 2);
+
+            int xMargin = (int)(frameW * RoiXMarginRatio);
+            xMargin = Math.Clamp(xMargin, 0, frameW / 4);
+
+            var roi = new Rect(xMargin, y0, frameW - xMargin * 2, frameH - y0);
+            if (roi.Width < 80 || roi.Height < 80)
+                throw new Exception($"ROI too small: {roi}");
+
+            using var laneProbRoi = new Mat(laneProbOrig32f, roi);
+            using var laneMask = BuildLaneLineMaskFast(laneProbRoi);
+
+            Mat? driveRoi8u = null;
+            if (UseDrivableGate && _drivableMaskOrig != null && !_drivableMaskOrig.Empty()
+                && _drivableMaskOrig.Width == frameW && _drivableMaskOrig.Height == frameH)
+            {
+                using var driveRoiView = new Mat(_drivableMaskOrig, roi);
+                driveRoi8u = driveRoiView.Clone();
+
+                int k = MakeOdd(GateErodeK);
+                if (k >= 3)
+                {
+                    using var kernel = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(k, k));
+                    Cv2.Erode(driveRoi8u, driveRoi8u, kernel);
+                }
+
+                Cv2.BitwiseAnd(laneMask, driveRoi8u, laneMask);
+            }
+
+            var sampleYs = BuildSampleYs(roi.Height);
+
+            // candidates polylines (ROI)
+            var candidates = BuildCandidatePolylinesRoi(laneMask, driveRoi8u, sampleYs);
+
+            // candidate lines x = m*y + b
+            var candLines = candidates
+                .Select(pl => (poly: pl, line: FitLineFromPolyline(pl)))
+                .Where(t => !double.IsNaN(t.line.m))
+                .ToList();
+
+            // yRef: near bottom
+            int yRef = (int)(roi.Height * 0.92);
+            yRef = Math.Clamp(yRef, 0, roi.Height - 1);
+
+            // corridor (drivable) for laneW
+            GetCorridorLRAtRow(driveRoi8u, yRef, roi.Width, out int corL, out int corR);
+            if (corR - corL < roi.Width * 0.35)
+            {
+                corL = 0;
+                corR = roi.Width - 1;
+            }
+
+            double laneW = (corR - corL) / (double)total;
+            laneW = Math.Max(laneW, 40.0);
+
+            // Ego assumed centered in ROI
+            double centerX = roi.Width * 0.5;
+
+            int egoLeftIdx = ego - 1;
+            int egoRightIdx = ego;
+
+            double egoCenterBoundaryOffset = (ego - 0.5);
+            double[] expectedX = new double[total + 1];
+            for (int j = 0; j <= total; j++)
+            {
+                expectedX[j] = centerX + (j - egoCenterBoundaryOffset) * laneW;
+                expectedX[j] = Math.Clamp(expectedX[j], 0, roi.Width - 1);
+            }
+
+            int snapWin = Math.Max(40, ExpectedWindowPx);
+            var used = new HashSet<int>();
+
+            int PickNearestCandidate(double ex)
+            {
+                int best = -1;
+                double bestDx = double.MaxValue;
+
+                for (int i = 0; i < candLines.Count; i++)
+                {
+                    if (used.Contains(i)) continue;
+                    double x = candLines[i].line.m * yRef + candLines[i].line.b;
+                    double dx = Math.Abs(x - ex);
+                    if (dx < bestDx) { bestDx = dx; best = i; }
+                }
+
+                if (best >= 0)
+                {
+                    double xBest = candLines[best].line.m * yRef + candLines[best].line.b;
+                    if (Math.Abs(xBest - ex) <= snapWin) return best;
+                }
+                return -1;
+            }
+
+            (double m, double b)? egoL = null;
+            (double m, double b)? egoR = null;
+
+            int cL = PickNearestCandidate(expectedX[egoLeftIdx]);
+            if (cL >= 0) { used.Add(cL); egoL = candLines[cL].line; }
+
+            int cR = PickNearestCandidate(expectedX[egoRightIdx]);
+            if (cR >= 0) { used.Add(cR); egoR = candLines[cR].line; }
+
+            // vanishing point (ROI coords)
+            Point2d vp = new Point2d(centerX, -roi.Height * 0.35);
+
+            if (egoL.HasValue && egoR.HasValue)
+            {
+                if (TryIntersect(egoL.Value, egoR.Value, out var inter))
+                {
+                    // keep VP above ROI and not too crazy
+                    if (inter.Y < roi.Height * 0.2 && Math.Abs(inter.X - centerX) < roi.Width * 0.7)
+                        vp = inter;
+                }
+            }
+
+            // build ideal boundary lines through VP and expected x at yRef
+            var boundaries = new List<(double m, double b)>(total + 1);
+
+            for (int j = 0; j <= total; j++)
+            {
+                double xRef = expectedX[j];
+
+                // line passing through (xRef, yRef) and VP
+                // x = m*y + b
+                double dy = (yRef - vp.Y);
+                if (Math.Abs(dy) < 1e-6) dy = 1e-6;
+
+                double m = (xRef - vp.X) / dy;
+                double b = xRef - m * yRef;
+
+                boundaries.Add((m, b));
+            }
+
+            // optional snap each boundary to closest candidate if near at yRef
+            int followWin = Math.Max(25, FollowWindowPx);
+            for (int j = 0; j < boundaries.Count; j++)
+            {
+                // already picked ego boundaries? prioritize keeping them
+                bool isEgoB = (j == egoLeftIdx && egoL.HasValue) || (j == egoRightIdx && egoR.HasValue);
+                if (isEgoB) continue;
+
+                double ex = boundaries[j].m * yRef + boundaries[j].b;
+
+                int best = -1;
+                double bestDx = double.MaxValue;
+                for (int i = 0; i < candLines.Count; i++)
+                {
+                    double x = candLines[i].line.m * yRef + candLines[i].line.b;
+                    double dx = Math.Abs(x - ex);
+                    if (dx < bestDx) { bestDx = dx; best = i; }
+                }
+
+                if (best >= 0 && bestDx <= followWin)
+                {
+                    boundaries[j] = candLines[best].line;
+                }
+            }
+
+            // inject ego boundaries if found
+            if (egoL.HasValue) boundaries[egoLeftIdx] = egoL.Value;
+            if (egoR.HasValue) boundaries[egoRightIdx] = egoR.Value;
+
+            // enforce monotonic at yRef
+            var xsRef = boundaries.Select(b => b.m * yRef + b.b).ToArray();
+            for (int i = 1; i < xsRef.Length; i++)
+            {
+                if (xsRef[i] < xsRef[i - 1] + 6)
+                {
+                    double delta = (xsRef[i - 1] + 6) - xsRef[i];
+                    // shift by adjusting intercept b
+                    boundaries[i] = (boundaries[i].m, boundaries[i].b + delta);
+                    xsRef[i] += delta;
+                }
+            }
+
+            // build draw polylines (frame coords) with clipping at crossings
+            var polylinesFrame = new List<Point[]>(total + 1);
+            int yTop = (int)(roi.Height * Math.Clamp(SampleYTopRatio, 0.05f, 0.8f));
+            int yBot = (int)(roi.Height * Math.Clamp(SampleYBottomRatio, 0.6f, 0.99f));
+            yTop = Math.Clamp(yTop, 0, roi.Height - 1);
+            yBot = Math.Clamp(yBot, 0, roi.Height - 1);
+            if (yBot <= yTop) { yTop = 0; yBot = roi.Height - 1; }
+
+            for (int j = 0; j <= total; j++)
+            {
+                var ln = boundaries[j];
+                var pts = new List<Point>(SampleBandCount);
+
+                for (int k = 0; k < SampleBandCount; k++)
+                {
+                    double t = (double)k / Math.Max(1, SampleBandCount - 1);
+                    int y = (int)Math.Round(yBot + (yTop - yBot) * t);
+                    y = Math.Clamp(y, 0, roi.Height - 1);
+
+                    double x = ln.m * y + ln.b;
+                    x = Math.Clamp(x, 0, roi.Width - 1);
+
+                    pts.Add(new Point(roi.X + (int)Math.Round(x), roi.Y + y));
+                }
+
+                polylinesFrame.Add(pts.ToArray());
+            }
+
+            // pack result
+            var res = new LaneAnalysisResult
+            {
+                Roi = roi,
+                SampleYs = sampleYs,
+                Boundaries = boundaries,
+                BoundaryPolylinesFrame = polylinesFrame,
+                CandidatePolylinesFrame = DebugDrawCandidatePolylines ? candidates.Select(pl => pl.Select(p => new Point(p.X + roi.X, p.Y + roi.Y)).ToArray()).ToList() : new List<Point[]>(),
+                VanishingPointRoi = vp,
+                LaneMaskRoi8u = laneMask.Clone(),
+                DriveMaskRoi8u = driveRoi8u
+            };
+
+            return res;
+        }
+
+        // =========================
+        // Build lane mask (fast)
+        // =========================
+        private Mat BuildLaneLineMaskFast(Mat laneProbRoi32f)
+        {
+            using var prob8u = new Mat();
+            laneProbRoi32f.ConvertTo(prob8u, MatType.CV_8UC1, 255.0);
+
+            using var bin = new Mat();
+            double thr = 255.0 * Math.Clamp(LaneProbThreshold, 0.05f, 0.95f);
+            Cv2.Threshold(prob8u, bin, thr, 255, ThresholdTypes.Binary);
+
+            int ok = MakeOdd(LaneMaskOpenK);
+            if (ok >= 3)
+            {
+                using var k = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(ok, ok));
+                Cv2.MorphologyEx(bin, bin, MorphTypes.Open, k);
+            }
+
+            int ck = MakeOdd(LaneMaskCloseK);
+            if (ck >= 3)
+            {
+                using var k = Cv2.GetStructuringElement(MorphShapes.Rect, new Size(ck, ck));
+                Cv2.MorphologyEx(bin, bin, MorphTypes.Close, k);
+            }
+
+            return bin.Clone();
+        }
+
+        private static int MakeOdd(int k)
+        {
+            if (k <= 0) return 0;
+            return (k % 2 == 1) ? k : (k + 1);
+        }
+
+        // =========================
+        // Sample Ys
+        // =========================
+        private int[] BuildSampleYs(int roiH)
+        {
+            int n = Math.Clamp(SampleBandCount, 8, 40);
+            int yTop = (int)(roiH * Math.Clamp(SampleYTopRatio, 0.05f, 0.8f));
+            int yBot = (int)(roiH * Math.Clamp(SampleYBottomRatio, 0.6f, 0.99f));
+            yTop = Math.Clamp(yTop, 0, roiH - 1);
+            yBot = Math.Clamp(yBot, 0, roiH - 1);
+            if (yBot <= yTop) { yTop = 0; yBot = roiH - 1; }
+
+            var ys = new int[n];
+            for (int i = 0; i < n; i++)
+            {
+                double t = (double)i / Math.Max(1, n - 1);
+                ys[i] = (int)Math.Round(yBot + (yTop - yBot) * t);
+                ys[i] = Math.Clamp(ys[i], 0, roiH - 1);
+            }
+            return ys;
+        }
+
+        // =========================
+        // Candidate polylines
+        // =========================
+        private List<List<Point>> BuildCandidatePolylinesRoi(Mat laneMask8u, Mat? driveMask8u, int[] sampleYs)
+        {
+            int w = laneMask8u.Width;
+            int h = laneMask8u.Height;
+
+            var polylines = new List<List<Point>>();
+
+            // For each y, find peaks in column sums in a band around y
+            foreach (int y in sampleYs)
+            {
+                int bandH = Math.Clamp(h / 18, 10, 28);
+                int y0 = Math.Clamp(y - bandH / 2, 0, h - 1);
+                int y1 = Math.Clamp(y0 + bandH, 0, h);
+                if (y1 <= y0 + 1) continue;
+
+                using var band = new Mat(laneMask8u, new Rect(0, y0, w, y1 - y0));
+
+                int[] hist = ReduceColumnSumToInt(band);
+
+                // optional corridor from drive
+                int left = 0, right = w - 1;
+                if (driveMask8u != null && !driveMask8u.Empty())
+                {
+                    using var driveBand = new Mat(driveMask8u, new Rect(0, y0, w, y1 - y0));
+                    int[] d = ReduceColumnSumToInt(driveBand);
+                    GetCorridorFromHist(d, y1 - y0, out left, out right);
+                }
+
+                var peaks = FindPeaks(hist, left, right, maxPeaks: 10, minDistance: Math.Max(10, PeakMinGapPx));
+
+                // store as single-point "polyline candidates"; later we stitch by x proximity
+                foreach (int px in peaks)
+                {
+                    polylines.Add(new List<Point> { new Point(px, y) });
+                }
+            }
+
+            // Stitch: group points by rough slope continuity (simple nearest by y order)
+            // We do a lightweight stitch: sort by y descending (bottom->top), then chain by nearest x
+            var groups = new List<List<Point>>();
+            var pts = polylines.SelectMany(g => g).ToList();
+            pts.Sort((a, b) => b.Y.CompareTo(a.Y)); // bottom first
+
+            foreach (var p in pts)
+            {
+                List<Point>? best = null;
+                int bestDx = int.MaxValue;
+
+                foreach (var g in groups)
+                {
+                    var last = g[g.Count - 1];
+                    // allow only if going upward
+                    if (p.Y >= last.Y) continue;
+
+                    int dx = Math.Abs(p.X - last.X);
+                    if (dx < bestDx && dx <= Math.Max(25, FollowWindowPx))
+                    {
+                        bestDx = dx;
+                        best = g;
+                    }
+                }
+
+                if (best == null) groups.Add(new List<Point> { p });
+                else best.Add(p);
+            }
+
+            // filter short
+            groups = groups.Where(g => g.Count >= Math.Max(6, SampleBandCount / 3)).ToList();
+            // ensure each is bottom->top order
+            foreach (var g in groups) g.Sort((a, b) => b.Y.CompareTo(a.Y));
+
+            return groups;
+        }
+
+        private static int[] ReduceColumnSumToInt(Mat m8u)
+        {
+            int w = m8u.Width;
+            int h = m8u.Height;
+            var sum = new int[w];
+
+            unsafe
+            {
+                for (int y = 0; y < h; y++)
+                {
+                    byte* row = (byte*)m8u.Ptr(y);
+                    for (int x = 0; x < w; x++)
+                        sum[x] += (row[x] > 0) ? 1 : 0;
+                }
+            }
+            return sum;
+        }
+
+        private static void GetCorridorFromHist(int[] hist, int bandH, out int left, out int right)
+        {
+            int w = hist.Length;
+            int thr = Math.Max(3, bandH / 20);
+
+            left = 0;
+            while (left < w && hist[left] < thr) left++;
+
+            right = w - 1;
+            while (right >= 0 && hist[right] < thr) right--;
+
+            if (right - left < w * 0.25) { left = 0; right = w - 1; }
+        }
+
+        private static void GetCorridorLRAtRow(Mat? driveMaskRoi8u, int yRef, int w, out int left, out int right)
+        {
+            left = 0; right = w - 1;
+            if (driveMaskRoi8u == null || driveMaskRoi8u.Empty()) return;
+
+            yRef = Math.Clamp(yRef, 0, driveMaskRoi8u.Height - 1);
+            unsafe
+            {
+                byte* row = (byte*)driveMaskRoi8u.Ptr(yRef);
+                int l = 0;
+                while (l < w && row[l] == 0) l++;
+                int r = w - 1;
+                while (r >= 0 && row[r] == 0) r--;
+
+                if (r - l >= w * 0.25) { left = l; right = r; }
+            }
         }
 
         private static int[] FindPeaks(int[] hist, int left, int right, int maxPeaks, int minDistance)
         {
+            left = Math.Clamp(left, 0, hist.Length - 1);
+            right = Math.Clamp(right, 0, hist.Length - 1);
+            if (right <= left) return Array.Empty<int>();
+
             var peaks = new List<(int x, int v)>();
+
             for (int x = left + 1; x < right - 1; x++)
             {
                 int v = hist[x];
-                if (v > hist[x - 1] && v > hist[x + 1])
+                if (v <= 0) continue;
+                if (v >= hist[x - 1] && v >= hist[x + 1])
                     peaks.Add((x, v));
             }
 
+            // strong first
             peaks.Sort((a, b) => b.v.CompareTo(a.v));
 
             var picked = new List<int>();
-            foreach (var (x, _) in peaks)
+            foreach (var p in peaks)
             {
-                if (picked.All(px => Math.Abs(px - x) >= minDistance))
+                if (p.v < 1) continue;
+                bool ok = true;
+                foreach (var q in picked)
                 {
-                    picked.Add(x);
-                    if (picked.Count >= maxPeaks) break;
+                    if (Math.Abs(q - p.x) < minDistance) { ok = false; break; }
                 }
+                if (!ok) continue;
+                picked.Add(p.x);
+                if (picked.Count >= maxPeaks) break;
             }
+
             picked.Sort();
             return picked.ToArray();
         }
 
-        private static int NearestPeak(int[] peaks, int x)
-            => peaks.OrderBy(p => Math.Abs(p - x)).FirstOrDefault();
-
-        private static int NearestPeakWithin(int[] peaks, int x, int win)
+        private static (double m, double b) FitLineFromPolyline(List<Point> poly)
         {
-            int best = -1;
-            int bestDist = int.MaxValue;
-            foreach (var p in peaks)
-            {
-                int d = Math.Abs(p - x);
-                if (d <= win && d < bestDist)
-                {
-                    best = p;
-                    bestDist = d;
-                }
-            }
-            return best;
-        }
+            if (poly == null || poly.Count < 2) return (double.NaN, double.NaN);
 
-        // bin: ROI binary (h x w), y=0 상단, y=h-1 하단
-        // return: list of (x,y) from bottom->top (y desc)
-        private static List<(int x, int y)> TraceBoundaryX(Mat bin, int seedX, int win, int step)
-        {
-            int w = bin.Width;
-            int h = bin.Height;
-
-            var trace = new List<(int x, int y)>(Math.Max(8, h / Math.Max(1, step)));
-
-            int xCur = Math.Clamp(seedX, 0, w - 1);
-
-            for (int y = h - 1; y >= 0; y -= Math.Max(1, step))
-            {
-                int x0 = Math.Max(0, xCur - win);
-                int x1 = Math.Min(w - 1, xCur + win);
-                if (x1 <= x0) break;
-
-                // window에서 가장 "많이 켜진" column 찾기 (row 한 줄만 보면 약해서, 주변 3줄 합산)
-                int y0 = Math.Max(0, y - 1);
-                int y1 = Math.Min(h - 1, y + 1);
-
-                int bestX = xCur;
-                int bestScore = -1;
-
-                for (int x = x0; x <= x1; x++)
-                {
-                    int s = 0;
-                    for (int yy = y0; yy <= y1; yy++)
-                        s += bin.At<byte>(yy, x); // 0 or 255
-
-                    if (s > bestScore)
-                    {
-                        bestScore = s;
-                        bestX = x;
-                    }
-                }
-
-                // score가 너무 낮으면(차선이 끊김) xCur 유지
-                if (bestScore <= 0) bestX = xCur;
-
-                xCur = bestX;
-                trace.Add((xCur, y));
-            }
-
-            return trace;
-        }
-
-        private static void SmoothTraceInPlace(List<(int x, int y)> trace, int k)
-        {
-            if (trace == null || trace.Count < 3) return;
-            if (k <= 1) return;
-
-            int n = trace.Count;
-            var xs = trace.Select(t => t.x).ToArray();
-
-            int half = k / 2;
-            var sm = new int[n];
+            // linear regression x = m*y + b
+            double sumY = 0, sumX = 0, sumYY = 0, sumYX = 0;
+            int n = poly.Count;
 
             for (int i = 0; i < n; i++)
             {
-                int a = Math.Max(0, i - half);
-                int b = Math.Min(n - 1, i + half);
-                int sum = 0;
-                int cnt = 0;
-                for (int j = a; j <= b; j++)
-                {
-                    sum += xs[j];
-                    cnt++;
-                }
-                sm[i] = sum / Math.Max(1, cnt);
+                double y = poly[i].Y;
+                double x = poly[i].X;
+                sumY += y;
+                sumX += x;
+                sumYY += y * y;
+                sumYX += y * x;
             }
 
-            for (int i = 0; i < n; i++)
-                trace[i] = (sm[i], trace[i].y);
+            double denom = (n * sumYY - sumY * sumY);
+            if (Math.Abs(denom) < 1e-6) return (double.NaN, double.NaN);
+
+            double m = (n * sumYX - sumY * sumX) / denom;
+            double b = (sumX - m * sumY) / n;
+            return (m, b);
         }
 
-        private void PushHistory(int[] xs)
+        private static bool TryIntersect((double m, double b) L, (double m, double b) R, out Point2d inter)
         {
-            if (SmoothHistory <= 1) return;
-            _historyX.Enqueue(xs.ToArray());
-            while (_historyX.Count > SmoothHistory) _historyX.Dequeue();
-        }
+            // x = m*y + b
+            // m1*y + b1 = m2*y + b2 => y = (b2-b1)/(m1-m2)
+            inter = default;
+            double den = (L.m - R.m);
+            if (Math.Abs(den) < 1e-6) return false;
 
-        private int[] AverageHistory()
-        {
-            if (_historyX.Count == 0) return Array.Empty<int>();
-
-            int n = _historyX.Peek().Length;
-            var sum = new int[n];
-
-            foreach (var arr in _historyX)
-                for (int i = 0; i < n; i++) sum[i] += arr[i];
-
-            for (int i = 0; i < n; i++) sum[i] /= _historyX.Count;
-            return sum;
+            double y = (R.b - L.b) / den;
+            double x = L.m * y + L.b;
+            inter = new Point2d(x, y);
+            return true;
         }
     }
 }
