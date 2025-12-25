@@ -59,10 +59,25 @@ namespace WpfApp1.ViewModels
         private string _countText = "L:0 | F:0 | R:0";
         public string CountText { get => _countText; set { _countText = value; OnPropertyChanged(); } }
 
+        // 상단 UI용 프로퍼티 추가
+        private int _detectionsCount = 0;
+        public int DetectionsCount { get => _detectionsCount; set { _detectionsCount = value; OnPropertyChanged(); } }
+
+        private string _trackedCountText = "0";
+        public string TrackedCountText { get => _trackedCountText; set { _trackedCountText = value; OnPropertyChanged(); } }
+
+        private string _videoPath = "No File Loaded";
+        public string VideoPath { get => _videoPath; set { _videoPath = value; OnPropertyChanged(); } }
+
+        public string CurrentLaneLabel => $"LANE {CurrentLane} SCANNING";
+
         private BitmapSource? _frameImage;
         public BitmapSource? FrameImage { get => _frameImage; set { _frameImage = value; OnPropertyChanged(); } }
 
+        // 커맨드
         public RelayCommand OpenVideoCommand { get; }
+        public RelayCommand StopCommand { get; } // Stop 커맨드 명시
+
         private const int LaneInferIntervalMs = 200;
         private const double BaseLineRatio = 0.7;
 
@@ -78,7 +93,10 @@ namespace WpfApp1.ViewModels
             {
                 System.Windows.MessageBox.Show($"DB 연결 실패: {ex.Message}");
             }
+
             OpenVideoCommand = new RelayCommand(OpenVideo);
+            StopCommand = new RelayCommand(StopVideo); // Stop 커맨드 연결 확인
+
             _timer.Tick += Timer_Tick;
             _timer.Interval = TimeSpan.FromMilliseconds(1);
             InitializeDetectors();
@@ -98,42 +116,36 @@ namespace WpfApp1.ViewModels
             var d = new OpenFileDialog();
             if (d.ShowDialog() == true)
             {
+                VideoPath = d.FileName;
                 _video.Open(d.FileName);
                 _modelCache.Clear();
                 _countedIds.Clear();
                 _countL = _countF = _countR = 0;
-
-                SeedDemoData(); // 시연 데이터 즉시 삽입
+                CountText = "L:0 | F:0 | R:0";
+                TrackedCountText = "0";
                 _timer.Start();
+                OnPropertyChanged(nameof(CurrentLaneLabel));
             }
         }
 
-        private void SeedDemoData()
+        // 스탑 기능 구현: 타이머 중지, 비디오 닫기, 이미지 널 처리
+        private void StopVideo()
         {
-            if (_dbCollection == null) return;
-            Task.Run(async () => {
-                try
-                {
-                    var demoRecords = new List<VehicleRecord> {
-                        new VehicleRecord { TrackId = 999, FirstDetectedTime = DateTime.Now.ToString("HH:mm:ss"), SystemTime = DateTime.Now, LaneNumber = 1, VehicleType = "CAR", ModelName = "BMW M6 Convertible 2010", Speed = 145.5, ViolationReason = "과속" },
-                        new VehicleRecord { TrackId = 888, FirstDetectedTime = DateTime.Now.ToString("HH:mm:ss"), SystemTime = DateTime.Now, LaneNumber = 1, VehicleType = "TRUCK", ModelName = "Hyundai Xcient", Speed = 82.3, ViolationReason = "지정차로 위반(상위차로 진입)" },
-                        new VehicleRecord { TrackId = 777, FirstDetectedTime = DateTime.Now.ToString("HH:mm:ss"), SystemTime = DateTime.Now, LaneNumber = 3, VehicleType = "CAR", ModelName = "Genesis G80", Speed = 95.2, ViolationReason = "정상" },
-                        new VehicleRecord { TrackId = 666, FirstDetectedTime = DateTime.Now.ToString("HH:mm:ss"), SystemTime = DateTime.Now, LaneNumber = 4, VehicleType = "CAR", ModelName = "Avante CN7", Speed = 100.1, ViolationReason = "정상" },
-                        new VehicleRecord { TrackId = 555, FirstDetectedTime = DateTime.Now.ToString("HH:mm:ss"), SystemTime = DateTime.Now, LaneNumber = 2, VehicleType = "BUS", ModelName = "Hyundai Universe", Speed = 88.0, ViolationReason = "정상" }
-                    };
-                    foreach (var r in demoRecords)
-                    {
-                        var filter = Builders<VehicleRecord>.Filter.Eq("TrackId", r.TrackId);
-                        await _dbCollection.ReplaceOneAsync(filter, r, new ReplaceOptions { IsUpsert = true });
-                    }
-                }
-                catch { }
-            });
+            _timer.Stop();
+            _video.Close(); // VideoPlayerService 내부의 Capture 해제
+            FrameImage = null;
+            DetectionsCount = 0;
+            VideoPath = "Stopped";
         }
 
         private void Timer_Tick(object? sender, EventArgs e)
         {
-            if (!_video.Read(_frame) || _frame.Empty()) return;
+            if (!_video.Read(_frame) || _frame.Empty())
+            {
+                StopVideo(); // 영상이 끝나면 정지 로직 수행
+                return;
+            }
+
             long nowMs = Environment.TickCount64;
 
             // 1. 차선 인식 (YOLOP)
@@ -161,7 +173,7 @@ namespace WpfApp1.ViewModels
                 });
             }
 
-            // 2. 객체 인식 및 실시간 DB 업데이트
+            // 2. 객체 인식 및 추적
             if (!_isBusy && _detector != null)
             {
                 _isBusy = true;
@@ -186,7 +198,8 @@ namespace WpfApp1.ViewModels
                                     _modelCache.TryAdd(d.TrackId, GetSpecificCarModel(crop));
                                 }
                             }
-                            // [수정] 데이터 삽입 조건 완화 (30 -> 5)
+
+                            // 실시간 DB 업데이트
                             foreach (var track in _trackedObjects.Values.Where(t => t.UpdateCount > 5))
                             {
                                 UpdateRealtimeDb(track);
@@ -197,10 +210,39 @@ namespace WpfApp1.ViewModels
                 });
             }
 
-            lock (_trackedObjects) { UpdateCounting(_frame.Width, _frame.Height); }
-            List<Detection> drawList; lock (_detLock) { drawList = _currentDetections.ToList(); }
+            // 3. 카운팅 및 렌더링
+            lock (_trackedObjects)
+            {
+                UpdateCounting(_frame.Width, _frame.Height);
+                DetectionsCount = _currentDetections.Count;
+                TrackedCountText = _trackedObjects.Count.ToString();
+            }
+
+            List<Detection> drawList;
+            lock (_detLock) { drawList = _currentDetections.ToList(); }
+
             DrawOutput(_frame, drawList);
             FrameImage = _frame.ToBitmapSource();
+        }
+
+        private void UpdateCounting(int w, int h)
+        {
+            int lineY = (int)(h * BaseLineRatio);
+            foreach (var t in _trackedObjects.Values)
+            {
+                if (_countedIds.Contains(t.Id)) continue;
+
+                var center = new Point(t.LastBox.X + t.LastBox.Width / 2, t.LastBox.Y + t.LastBox.Height / 2);
+
+                if (center.Y > lineY)
+                {
+                    _countedIds.Add(t.Id);
+                    if (center.X < w * 0.35) { _countL++; t.Direction = "L"; }
+                    else if (center.X > w * 0.65) { _countR++; t.Direction = "R"; }
+                    else { _countF++; t.Direction = "F"; }
+                }
+            }
+            CountText = $"L:{_countL} | F:{_countF} | R:{_countR}";
         }
 
         private void UpdateRealtimeDb(TrackedObject track)
@@ -215,6 +257,7 @@ namespace WpfApp1.ViewModels
                 .Set("Speed", Math.Round(track.SpeedInKmh, 1))
                 .Set("ViolationReason", violation)
                 .Set("LaneNumber", track.CurrentLane)
+                .Set("Direction", track.Direction)
                 .Set("VehicleType", GetTypeName(track.LastClassId))
                 .SetOnInsert("FirstDetectedTime", track.FirstDetectedTime)
                 .SetOnInsert("ModelName", model ?? "Unknown");
@@ -228,6 +271,7 @@ namespace WpfApp1.ViewModels
         {
             Mat? dLoc = null; Mat? lLoc = null; bool lOk;
             lock (_lock) { lOk = _laneOk; if (_driveMask != null) dLoc = _driveMask.Clone(); if (_laneProb != null) lLoc = _laneProb.Clone(); }
+
             try
             {
                 if (dLoc != null && !dLoc.Empty())
@@ -257,6 +301,7 @@ namespace WpfApp1.ViewModels
                     if (!_trackedObjects.TryGetValue(d.TrackId, out var t)) continue;
                     Cv2.Rectangle(frame, d.Box, Scalar.Yellow, 2);
                     _modelCache.TryGetValue(d.TrackId, out string? m);
+
                     string l1 = $"[{t.FirstDetectedTime}] {GetTypeName(t.LastClassId)}";
                     string l2 = $"{m ?? "Analysing..."} | {t.SpeedInKmh:F1}km/h | L{t.CurrentLane}";
                     Scalar bgColor = t.CheckViolation() != "정상" ? Scalar.Red : Scalar.Black;
@@ -293,9 +338,11 @@ namespace WpfApp1.ViewModels
                 }
                 if (best != -1)
                 {
-                    int ln = -1; Point bc = new Point(dets[best].Box.X + dets[best].Box.Width / 2, dets[best].Box.Y + dets[best].Box.Height);
+                    int ln = -1;
+                    Point bc = new Point(dets[best].Box.X + dets[best].Box.Width / 2, dets[best].Box.Y + dets[best].Box.Height);
                     lock (_lock) { if (_laneOk) ln = _laneAnalyzer.TryGetLaneNumberForPoint(bc); }
-                    dets[best].TrackId = t.Id; t.Update(dets[best].ClassId, dets[best].Box, time, ln);
+                    dets[best].TrackId = t.Id;
+                    t.Update(dets[best].ClassId, dets[best].Box, time, ln);
                     used.Add(best);
                 }
                 else t.Missed();
@@ -303,7 +350,8 @@ namespace WpfApp1.ViewModels
             foreach (var d in dets.Where((_, i) => !used.Contains(i)))
             {
                 var nt = new TrackedObject(d.ClassId, d.Box, time, d.ClassName);
-                d.TrackId = nt.Id; _trackedObjects[nt.Id] = nt;
+                d.TrackId = nt.Id;
+                _trackedObjects[nt.Id] = nt;
             }
             _trackedObjects.Where(kv => kv.Value.ShouldBeDeleted).ToList().ForEach(k => {
                 _trackedObjects.Remove(k.Key); _modelCache.TryRemove(k.Key, out _);
@@ -321,33 +369,20 @@ namespace WpfApp1.ViewModels
                 for (int y = 0; y < 160; y++) for (int x = 0; x < 160; x++)
                     {
                         var p = res.At<Vec3b>(y, x);
-                        input[0, 0, y, x] = p.Item0 / 255f; input[0, 1, y, x] = p.Item1 / 255f; input[0, 2, y, x] = p.Item2 / 255f;
+                        input[0, 0, y, x] = p.Item0 / 255f;
+                        input[0, 1, y, x] = p.Item1 / 255f;
+                        input[0, 2, y, x] = p.Item2 / 255f;
                     }
                 lock (_sessionLock)
                 {
                     using var r = _classSession.Run(new[] { NamedOnnxValue.CreateFromTensor(_classSession.InputMetadata.Keys.First(), input) });
-                    var o = r.First().AsTensor<float>(); float[] s = new float[206];
+                    var o = r.First().AsTensor<float>();
+                    float[] s = new float[206];
                     for (int i = 0; i < o.Dimensions[2]; i++) for (int c = 0; c < 206; c++) s[c] += o[0, 4 + c, i];
                     return _carModelNames[Array.IndexOf(s, s.Max())];
                 }
             }
             catch { return "Vehicle"; }
-        }
-
-        private void UpdateCounting(int w, int h)
-        {
-            int lineY = (int)(h * BaseLineRatio);
-            foreach (var t in _trackedObjects.Values)
-            {
-                if (_countedIds.Contains(t.Id)) continue;
-                var center = new Point(t.LastBox.X + t.LastBox.Width / 2, t.LastBox.Y + t.LastBox.Height / 2);
-                if (center.Y > lineY)
-                {
-                    _countedIds.Add(t.Id);
-                    if (t.Direction == "L") _countL++; else if (t.Direction == "R") _countR++; else _countF++;
-                }
-            }
-            CountText = $"L:{_countL} | F:{_countF} | R:{_countR}";
         }
 
         private string GetTypeName(int id) => id switch { 2 => "CAR", 5 => "BUS", 7 => "TRUCK", _ => "Vehicle" };
