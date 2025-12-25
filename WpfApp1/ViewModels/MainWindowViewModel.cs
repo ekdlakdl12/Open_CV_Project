@@ -34,55 +34,8 @@ namespace WpfApp1.ViewModels
         private readonly object _detLock = new object();
         private IMongoCollection<VehicleRecord>? _dbCollection;
 
-        private readonly string[] _carModelNames =
-        {
-            // (너의 기존 리스트 그대로 유지)
-            "AM General Hummer SUV 2000","Acura RL Sedan 2012","Acura TL Sedan 2012","Acura TL Type-S 2008","Acura TSX Sedan 2012",
-            "Acura Integra Type R 2001","Acura ZDX Hatchback 2012","Aston Martin V8 Vantage Convertible 2012","Aston Martin V8 Vantage Coupe 2012",
-            "Aston Martin Virage Convertible 2012","Aston Martin Virage Coupe 2012","Audi RS 4 Convertible 2008","Audi A5 Coupe 2012","Audi TTS Coupe 2012",
-            "Audi R8 Coupe 2012","Audi V8 Sedan 1994","Audi 100 Sedan 1994","Audi 100 Wagon 1994","Audi TT Hatchback 2011","Audi S6 Sedan 2011",
-            "Audi S5 Convertible 2012","Audi S5 Coupe 2012","Audi S4 Sedan 2012","Audi S4 Sedan 2007","Audi TT RS Coupe 2012","BMW ActiveHybrid 5 Sedan 2012",
-            "BMW 1 Series Convertible 2012","BMW 1 Series Coupe 2012","BMW 3 Series Sedan 2012","BMW 3 Series Wagon 2012","BMW 6 Series Convertible 2007",
-            "BMW X5 SUV 2007","BMW X6 SUV 2012","BMW M3 Coupe 2012","BMW M5 Sedan 2010","BMW M6 Convertible 2010","BMW X3 SUV 2012",
-            "BMW Z4 Convertible 2012","Bentley Continental Supersports Conv. Convertible 2012","Bentley Arnage Sedan 2009","Bentley Mulsanne Sedan 2011",
-            "Bentley Continental GT Coupe 2012","Bentley Continental GT Coupe 2007","Bentley Continental Flying Spur Sedan 2007","Bugatti Veyron 16.4 Convertible 2009",
-            "Bugatti Veyron 16.4 Coupe 2009","Buick Regal GS 2012","Buick Rainier SUV 2007","Buick Verano Sedan 2012","Buick Enclave SUV 2012",
-            "Cadillac CTS-V Sedan 2012","Cadillac SRX SUV 2012","Cadillac Escalade EXT Crew Cab 2007","Chevrolet Silverado 1500 Hybrid Crew Cab 2012",
-            "Chevrolet Corvette Convertible 2012","Chevrolet Corvette ZR1 2012","Chevrolet Corvette Ron Fellows Edition Z06 2007","Chevrolet Traverse SUV 2012",
-            "Chevrolet Camaro Convertible 2012","Chevrolet HHR SS 2010","Chevrolet Impala Sedan 2007","Chevrolet Tahoe Hybrid SUV 2012","Chevrolet Sonic Sedan 2012",
-            "Chevrolet Express Cargo Van 2007","Chevrolet Avalanche Crew Cab 2012","Chevrolet Cobalt SS 2010","Chevrolet Malibu Hybrid Sedan 2010",
-            "Chevrolet TrailBlazer SS 2009","Chevrolet Silverado 2500HD Regular Cab 2012","Chevrolet Silverado 1500 Classic Extended Cab 2007",
-            "Chevrolet Express Van 2007","Chevrolet Monte Carlo Coupe 2007","Chevrolet Malibu Sedan 2007","Chevrolet Silverado 1500 Extended Cab 2012",
-            "Chevrolet Silverado 1500 Regular Cab 2012","Chrysler Aspen SUV 2009","Chrysler Sebring Convertible 2010","Chrysler Town and Country Minivan 2012",
-            "Chrysler 300 SRT-8 2010","Chrysler Crossfire Convertible 2008","Chrysler PT Cruiser Convertible 2008","Daewoo Nubira Wagon 2002",
-            "Dodge Caliber Wagon 2012","Dodge Caliber Wagon 2007","Dodge Caravan Minivan 2007","Dodge Ram SRT-10 2004","Dodge Neon SRT-4 2003",
-            "Dodge Durango SUV 2012","Dodge Durango SUV 2007","Dodge Journey SUV 2012","Dodge Dakota Crew Cab 2010","Dodge Dakota Club Cab 2010",
-            "Dodge Magnum Wagon 2008","Dodge Challenger Coupe 2011","Dodge Charger Sedan 2012","Dodge Charger SRT-8 2009","Eagle Talon Hatchback 1998",
-            "FIAT 500 Abarth 2012","FIAT 500 Convertible 2012","Ferrari FF Coupe 2012","Ferrari California Convertible 2012","Ferrari 458 Italia Convertible 2012",
-            "Ferrari 458 Italia Coupe 2012","Fisker Karma Sedan 2012","Ford F-450 Super Duty Crew Cab 2012","Ford Mustang Convertible 2007","Ford Fiesta Sedan 2012",
-            "Ford Ranger SuperCab 2011","Ford F-150 Regular Cab 2012","Ford F-150 Regular Cab 2007","Ford Focus Sedan 2007","Ford E-Series Wagon 2012",
-            "Ford Edge SUV 2012","Ford Ranger Regular Cab 2011","Ford Expedition EL SUV 2009","Ford Flex SUV 2012","Ford GT Coupe 2006","Ford Freestar Minivan 2007",
-            "Ford Expedition SUV 2012","Ford Focus ST Hatchback 2012","Ford Fusion Sedan 2012","Ford Taurus Sedan 2007","GMC Terrain SUV 2012","GMC Savana Van 2012",
-            "GMC Yukon Hybrid SUV 2012","GMC Acadia SUV 2012","GMC Canyon Extended Cab 2012","Geo Metro Hatchback 1993","HUMMER H3T Crew Cab 2010",
-            "HUMMER H2 SUT Crew Cab 2009","Honda Odyssey Minivan 2012","Honda RidgeLine Crew Cab 2012","Honda Civic Accord Sedan 2012","Honda Civic Accord Coupe 2012",
-            "Honda Civic Sedan 2012","Honda Civic Coupe 2012","Honda Odyssey Minivan 2007","Honda Insight Hatchback 2012","Honda S2000 Convertible 2009",
-            "Hyundai Genesis Sedan 2012","Hyundai Equus Sedan 2012","Hyundai Accent Sedan 2012","Hyundai Veloster Hatchback 2012","Hyundai Santa Fe SUV 2012",
-            "Hyundai Tucson SUV 2012","Hyundai Veracruz SUV 2012","Hyundai Sonata Hybrid Sedan 2012","Hyundai Elantra Sedan 2007","Hyundai Azera Sedan 2012",
-            "Infiniti G Coupe IPL 2012","Infiniti QX56 SUV 2011","Isuzu Ascender SUV 2006","Jaguar XK Convertible 2012","Jeep Liberty SUV 2012",
-            "Jeep Grand Cherokee SUV 2012","Jeep Compass SUV 2012","Jeep Patriot SUV 2012","Jeep Wrangler SUV 2012","Lamborghini Reventon Coupe 2008",
-            "Lamborghini Aventador Coupe 2012","Lamborghini Gallardo LP 570-4 Superleggera 2012","Lamborghini Diablo Coupe 2001",
-            "Land Rover Range Rover SUV 2012","Land Rover LR2 SUV 2012","Lincoln Town Car Sedan 2011","MINI Cooper Roadster Convertible 2012",
-            "Maybach Landaulet Convertible 2012","Mazda Tribute SUV 2011","McLaren MP4-12C Coupe 2012","Mercedes-Benz 300-Class Convertible 1993",
-            "Mercedes-Benz C-Class Sedan 2012","Mercedes-Benz SL-Class Coupe 2009","Mercedes-Benz E-Class Sedan 2012","Mercedes-Benz S-Class Sedan 2012",
-            "Mercedes-Benz Sprinter Van 2012","Mitsubishi Lancer Sedan 2012","Nissan Leaf Hatchback 2012","Nissan NV Passenger Van 2012","Nissan Juke SUV 2012",
-            "Nissan 240SX Coupe 1998","Oldsmobile Cutlass Supreme Silhouette Pontaic Trans Sport Wagon 1993","Plymouth Neon Sedan 1999",
-            "Porsche Panamera Sedan 2012","Ram C/V Cargo Van Minivan 2012","Rolls-Royce Phantom Drophead Coupe Convertible 2012","Rolls-Royce Ghost Sedan 2012",
-            "Rolls-Royce Phantom Sedan 2012","Scion xD Hatchback 2012","Spyker C8 Laviolette Coupe 2009","Spyker C8 Aileron Coupe 2011",
-            "Suzuki Aerio Sedan 2007","Suzuki Kizashi Sedan 2012","Suzuki SX4 Hatchback 2012","Suzuki SX4 Sedan 2012","Tesla Model S Sedan 2012",
-            "Toyota Sequoia SUV 2012","Toyota Camry Sedan 2012","Toyota Corolla Sedan 2012","Toyota 4Runner SUV 2012","Volkswagen Golf Hatchback 2012",
-            "Volkswagen Golf Hatchback 1991","Volkswagen Beetle Hatchback 2012","Volvo C30 Hatchback 2012","Volvo 240 Sedan 1993","Volvo XC90 SUV 2007",
-            "Smart fortwo Convertible 2012"
-        };
+        // CarModel 데이터 분리 참조
+        private readonly string[] _carModelNames = CarModelData.Names;
 
         private readonly ConcurrentDictionary<int, string> _modelCache = new();
         private readonly ConcurrentDictionary<int, Scalar> _colorCache = new();
@@ -94,10 +47,8 @@ namespace WpfApp1.ViewModels
         private readonly DispatcherTimer _timer = new();
         private long _lastLaneInferMs = 0;
 
-        // ✅ Merge_Carmodel_Lane_Test 스타일: 초록/빨강 오버레이용 캐시
-        private Mat? _driveMask;   // CV_8UC1 0/255 (orig size)
-        private Mat? _laneProb;    // (대부분 CV_32FC1 or CV_8UC1) laneProb 원본
-
+        private Mat? _driveMask;
+        private Mat? _laneProb;
         private readonly LaneAnalyzer _laneAnalyzer = new();
         private volatile bool _laneOk = false;
 
@@ -115,9 +66,10 @@ namespace WpfApp1.ViewModels
         public BitmapSource? FrameImage { get => _frameImage; set { _frameImage = value; OnPropertyChanged(); } }
 
         public RelayCommand OpenVideoCommand { get; }
-
-        // ✅ YOLOP infer interval (Merge_Carmodel_Lane_Test: 200ms 느낌)
         private const int LaneInferIntervalMs = 200;
+
+        // 기준선 위치 비율: 0.7(처음)과 0.8(이전)의 중간인 0.75로 설정
+        private const double BaseLineRatio = 0.75;
 
         public MainWindowViewModel()
         {
@@ -136,10 +88,6 @@ namespace WpfApp1.ViewModels
             _timer.Tick += Timer_Tick;
             _timer.Interval = TimeSpan.FromMilliseconds(1);
             InitializeDetectors();
-
-            // (선택) LaneAnalyzer 튜닝: 필요하면 여기서 값 조정
-            // _laneAnalyzer.RoiYStartRatio = 0.55f; // 기본값도 괜찮음
-            // _laneAnalyzer.LaneProbThreshold = 0.35f;
         }
 
         private void InitializeDetectors()
@@ -156,28 +104,22 @@ namespace WpfApp1.ViewModels
             if (!_video.Read(_frame) || _frame.Empty()) return;
             long nowMs = Environment.TickCount64;
 
-            // =========================
-            // 1) YOLOP lane/drivable (200ms)
-            // =========================
             if (!_isLaneBusy && _yolop != null && (nowMs - _lastLaneInferMs) >= LaneInferIntervalMs)
             {
                 _isLaneBusy = true;
                 _lastLaneInferMs = nowMs;
-
                 Mat laneFrame = _frame.Clone();
                 Task.Run(() =>
                 {
                     try
                     {
                         var r = _yolop.Infer(laneFrame);
-
                         lock (_lock)
                         {
-                            // cache masks for overlay
                             _driveMask?.Dispose();
                             _laneProb?.Dispose();
-                            _driveMask = r.DrivableMaskOrig;   // ✅ 초록
-                            _laneProb = r.LaneProbOrig;        // ✅ 빨강 기반
+                            _driveMask = r.DrivableMaskOrig;
+                            _laneProb = r.LaneProbOrig;
 
                             _laneAnalyzer.TotalLanes = this.TotalLanes;
                             _laneAnalyzer.EgoLane = this.CurrentLane;
@@ -190,17 +132,10 @@ namespace WpfApp1.ViewModels
                             }
                         }
                     }
-                    finally
-                    {
-                        laneFrame.Dispose();
-                        _isLaneBusy = false;
-                    }
+                    finally { laneFrame.Dispose(); _isBusy = false; _isLaneBusy = false; }
                 });
             }
 
-            // =========================
-            // 2) YOLOv8 detect
-            // =========================
             if (!_isBusy && _detector != null)
             {
                 _isBusy = true;
@@ -216,7 +151,6 @@ namespace WpfApp1.ViewModels
                             TrackAndMatch(dets, vTime);
                             lock (_detLock) { _currentDetections = dets.ToList(); }
 
-                            // car model classify (기존 그대로)
                             foreach (var d in dets.Where(x => x.ClassId == 2 && !_modelCache.ContainsKey(x.TrackId)))
                             {
                                 Rect safeBox = new Rect(Math.Max(0, d.Box.X), Math.Max(0, d.Box.Y),
@@ -235,14 +169,9 @@ namespace WpfApp1.ViewModels
                 });
             }
 
-            // =========================
-            // 3) Counting + Draw
-            // =========================
             lock (_trackedObjects) { UpdateCounting(_frame.Width, _frame.Height); }
-
             List<Detection> drawList;
             lock (_detLock) { drawList = _currentDetections.ToList(); }
-
             DrawOutput(_frame, drawList);
             FrameImage = _frame.ToBitmapSource();
         }
@@ -279,16 +208,14 @@ namespace WpfApp1.ViewModels
 
         private void UpdateCounting(int w, int h)
         {
-            int lineY = (int)(h * 0.7);
+            int lineY = (int)(h * BaseLineRatio);
             foreach (var track in _trackedObjects.Values)
             {
                 if (_countedIds.Contains(track.Id)) continue;
-
                 var center = new Point(track.LastBox.X + track.LastBox.Width / 2, track.LastBox.Y + track.LastBox.Height / 2);
+
                 if (center.Y > lineY)
                 {
-                    string dir = center.X < w * 0.35 ? "L" : (center.X > w * 0.65 ? "R" : "F");
-                    if (dir == "L") _countL++; else if (dir == "R") _countR++; else _countF++;
                     _countedIds.Add(track.Id);
 
                     int carLane = -1;
@@ -296,7 +223,12 @@ namespace WpfApp1.ViewModels
                     {
                         if (_laneOk) carLane = _laneAnalyzer.TryGetLaneNumberForPoint(center);
                     }
-                    SaveToDb(track, dir, carLane);
+
+                    if (track.Direction == "L") _countL++;
+                    else if (track.Direction == "R") _countR++;
+                    else _countF++;
+
+                    SaveToDb(track, track.Direction, carLane);
                 }
             }
             CountText = $"L:{_countL} | F:{_countF} | R:{_countR}";
@@ -305,6 +237,8 @@ namespace WpfApp1.ViewModels
         private void SaveToDb(TrackedObject track, string direction, int currentLane)
         {
             _modelCache.TryGetValue(track.Id, out string? modelName);
+            string violation = track.CheckViolation();
+
             var record = new VehicleRecord
             {
                 SystemTime = DateTime.Now,
@@ -314,102 +248,67 @@ namespace WpfApp1.ViewModels
                 Direction = direction,
                 Speed = Math.Round(track.SpeedInKmh, 1),
                 LaneNumber = currentLane,
-                ViolationReason = track.SpeedInKmh > 100 ? "속도 위반" : "정상"
+                ViolationReason = violation
             };
-            Task.Run(async () => { try { if (_dbCollection != null) await _dbCollection.InsertOneAsync(record); } catch { } });
+
+            Task.Run(async () => {
+                try { if (_dbCollection != null) await _dbCollection.InsertOneAsync(record); }
+                catch { }
+            });
         }
 
         private void DrawOutput(Mat frame, List<Detection> detections)
         {
-            // ====== (A) 초록(도로) 오버레이 ======
             Mat? driveLocal = null;
             Mat? laneProbLocal = null;
             bool laneOk;
-
             lock (_lock)
             {
                 laneOk = _laneOk;
-
-                // ★중요: 참조가 아니라 CLONE으로 안전 복사
-                if (_driveMask != null && !_driveMask.Empty())
-                    driveLocal = _driveMask.Clone();
-
-                if (_laneProb != null && !_laneProb.Empty())
-                    laneProbLocal = _laneProb.Clone();
+                if (_driveMask != null && !_driveMask.Empty()) driveLocal = _driveMask.Clone();
+                if (_laneProb != null && !_laneProb.Empty()) laneProbLocal = _laneProb.Clone();
             }
-
             try
             {
-                // 이후부터는 driveLocal/laneProbLocal만 사용
                 if (driveLocal != null && !driveLocal.Empty())
                 {
                     using var overlay = frame.Clone();
                     overlay.SetTo(new Scalar(0, 255, 0), driveLocal);
                     Cv2.AddWeighted(overlay, 0.20, frame, 0.80, 0, frame);
                 }
-
                 if (laneProbLocal != null && !laneProbLocal.Empty())
                 {
                     using var prob8u = new Mat();
-
                     if (laneProbLocal.Type() == MatType.CV_32FC1 || laneProbLocal.Type() == MatType.CV_32F)
                         laneProbLocal.ConvertTo(prob8u, MatType.CV_8UC1, 255.0);
-                    else if (laneProbLocal.Type() == MatType.CV_8UC1)
-                        laneProbLocal.CopyTo(prob8u);
-                    else
-                        Cv2.CvtColor(laneProbLocal, prob8u, ColorConversionCodes.BGR2GRAY);
-
+                    else if (laneProbLocal.Type() == MatType.CV_8UC1) laneProbLocal.CopyTo(prob8u);
                     using var m = new Mat();
                     double thr = 255.0 * Math.Min(0.85, (_laneAnalyzer.LaneProbThreshold + 0.25));
                     Cv2.Threshold(prob8u, m, thr, 255, ThresholdTypes.Binary);
-
                     using var laneOverlay = frame.Clone();
                     laneOverlay.SetTo(new Scalar(0, 0, 255), m);
                     Cv2.AddWeighted(laneOverlay, 0.10, frame, 0.90, 0, frame);
                 }
-
-                // 흰색 경계선은 기존대로 (단, _laneAnalyzer 접근은 lock으로 보호)
-                lock (_lock)
-                {
-                    if (laneOk) _laneAnalyzer.DrawOnFrame(frame);
-                }
+                lock (_lock) { if (laneOk) _laneAnalyzer.DrawOnFrame(frame); }
             }
-            finally
-            {
-                // 로컬 복사본 해제 (★크래시 방지 핵심)
-                driveLocal?.Dispose();
-                laneProbLocal?.Dispose();
-            }
+            finally { driveLocal?.Dispose(); laneProbLocal?.Dispose(); }
 
-
-            // ====== (D) UI/기존 로직 유지 ======
             Cv2.Rectangle(frame, new Rect(40, 40, 220, 80), Scalar.Black, -1);
-            Cv2.PutText(frame, $"Lanes: {TotalLanes} / Ego: {CurrentLane}", new Point(50, 70),
-                HersheyFonts.HersheySimplex, 0.5, Scalar.White, 1);
+            Cv2.PutText(frame, $"Lanes: {TotalLanes} / Ego: {CurrentLane}", new Point(50, 70), HersheyFonts.HersheySimplex, 0.5, Scalar.White, 1);
 
-            Cv2.Line(frame, 0, (int)(frame.Height * 0.7), frame.Width, (int)(frame.Height * 0.7), Scalar.Red, 2);
+            // 빨간색 기준선 (75% 위치)
+            Cv2.Line(frame, 0, (int)(frame.Height * BaseLineRatio), frame.Width, (int)(frame.Height * BaseLineRatio), Scalar.Red, 2);
 
             foreach (var d in detections)
             {
                 lock (_trackedObjects)
                 {
                     if (!_trackedObjects.TryGetValue(d.TrackId, out var track)) continue;
-                    if (!_colorCache.TryGetValue(d.TrackId, out var color)) color = Scalar.Yellow;
-
-                    Cv2.Rectangle(frame, d.Box, color, 2);
-
+                    Cv2.Rectangle(frame, d.Box, Scalar.Yellow, 2);
                     _modelCache.TryGetValue(d.TrackId, out string? model);
-
-                    int carLane = -1;
-                    var bottomCenter = new Point(d.Box.X + d.Box.Width / 2, d.Box.Y + d.Box.Height);
-                    lock (_lock)
-                    {
-                        if (_laneOk) carLane = _laneAnalyzer.TryGetLaneNumberForPoint(bottomCenter);
-                    }
-
                     string l1 = $"[{track.FirstDetectedTime}] {GetTypeName(track.LastClassId)}";
-                    string l2 = $"{model ?? "Analysing..."} | {track.SpeedInKmh:F1}km/h | L{(carLane > 0 ? carLane : 0)}";
-                    DrawInfoText(frame, d.Box, l1, l2, track.SpeedInKmh > 100 ? Scalar.Red : Scalar.Black);
+                    string l2 = $"{model ?? "Analysing..."} | {track.SpeedInKmh:F1}km/h | L{track.CurrentLane}";
+                    DrawInfoText(frame, d.Box, l1, l2, track.CheckViolation() != "정상" ? Scalar.Red : Scalar.Black);
                 }
             }
         }
@@ -440,21 +339,28 @@ namespace WpfApp1.ViewModels
                     float iou = YoloV8Onnx.IoU(track.LastBox, dets[i].Box);
                     if (iou > maxIou) { maxIou = iou; best = i; }
                 }
+
                 if (best != -1)
                 {
+                    int laneNum = -1;
+                    Point bc = new Point(dets[best].Box.X + dets[best].Box.Width / 2, dets[best].Box.Y + dets[best].Box.Height);
+                    lock (_lock) { if (_laneOk) laneNum = _laneAnalyzer.TryGetLaneNumberForPoint(bc); }
+
                     dets[best].TrackId = track.Id;
-                    track.Update(dets[best].ClassId, dets[best].Box, time);
+                    track.Update(dets[best].ClassId, dets[best].Box, time, laneNum);
                     used.Add(best);
                 }
                 else track.Missed();
             }
+
             foreach (var d in dets.Where((_, i) => !used.Contains(i)))
             {
-                var nt = new TrackedObject(d.ClassId, d.Box, time);
-                d.TrackId = nt.Id; _trackedObjects[nt.Id] = nt;
+                var nt = new TrackedObject(d.ClassId, d.Box, time, d.ClassName);
+                d.TrackId = nt.Id;
+                _trackedObjects[nt.Id] = nt;
             }
-            _trackedObjects.Where(kv => kv.Value.ShouldBeDeleted).ToList().ForEach(k =>
-            {
+
+            _trackedObjects.Where(kv => kv.Value.ShouldBeDeleted).ToList().ForEach(k => {
                 _trackedObjects.Remove(k.Key);
                 _modelCache.TryRemove(k.Key, out _);
                 _colorCache.TryRemove(k.Key, out _);
@@ -472,15 +378,7 @@ namespace WpfApp1.ViewModels
                 _modelCache.Clear();
                 _colorCache.Clear();
                 _countedIds.Clear();
-
-                lock (_lock)
-                {
-                    _driveMask?.Dispose(); _driveMask = null;
-                    _laneProb?.Dispose(); _laneProb = null;
-                    _laneOk = false;
-                    _lastLaneInferMs = 0;
-                }
-
+                _countL = _countF = _countR = 0;
                 _timer.Start();
             }
         }
