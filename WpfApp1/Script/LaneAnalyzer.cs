@@ -1,9 +1,10 @@
-﻿// LaneAnalyzer.cs (API-compatible with Merge_Car_DBlogic_Test)
-// - Keep current project signatures:
+﻿// LaneAnalyzer.cs (FULL REPLACEMENT - API compatible with your current project)
+// - Keeps signatures:
 //   Analyze(Mat laneProb, Size frameSize) -> bool
 //   DrawOnFrame(Mat frame) -> void
-//   TryGetLaneNumberForPoint(Point p) -> int
-// - Internals: use VANISHING-POINT perspective boundaries (Merge_Carmodel_Lane_Test style)
+//   TryGetLaneNumberForPoint(Point pFrame) -> int
+// - Internals: VP(소실점) 기반 경계 생성 + (중요) "겹침/교차 방지 + 최소 폭 유지" 강제
+//   => 흰색선이 서로 뚫고 나가거나 끝선이 붙어서 겹치는 현상 방지
 
 using OpenCvSharp;
 using System;
@@ -15,7 +16,7 @@ namespace WpfApp1.Scripts
     public sealed class LaneAnalyzer
     {
         // =========================
-        // Public tuning params (keep)
+        // Public tuning params
         // =========================
         public int TotalLanes { get; set; } = 5;   // 2..8
         public int EgoLane { get; set; } = 3;      // 1..TotalLanes
@@ -39,11 +40,16 @@ namespace WpfApp1.Scripts
         public float SampleYTopRatio { get; set; } = 0.30f;
         public float SampleYBottomRatio { get; set; } = 0.95f;
 
-        public int PeakMinStrength { get; set; } = 6;
+        public int PeakMinStrength { get; set; } = 6;  // (현재 구현에서는 직접 사용 비중 낮음)
         public int PeakMinGapPx { get; set; } = 18;
 
         public int ExpectedWindowPx { get; set; } = 90;
         public int FollowWindowPx { get; set; } = 75;
+
+        // --- anti-cross / min-width (요청 반영) ---
+        // ROI 기준 최소 차선 폭/경계간 최소 간격
+        public int MinLaneWidthPx { get; set; } = 55;     // 45~60 추천
+        public int MinBoundaryGapPx { get; set; } = 12;   // 10~16 추천
 
         // Debug
         public bool DebugDrawPeakDots { get; set; } = false;
@@ -51,7 +57,7 @@ namespace WpfApp1.Scripts
         public bool DebugDrawVanishingPoint { get; set; } = false;
 
         // =========================
-        // Exposed (keep current-style)
+        // Exposed
         // =========================
         public IReadOnlyList<Point[]> LaneBoundaries => _laneBoundaries;
         private readonly List<Point[]> _laneBoundaries = new();
@@ -59,7 +65,7 @@ namespace WpfApp1.Scripts
         // =========================
         // Internal masks / state
         // =========================
-        private Mat? _drivableMaskOrig; // expected 0/255 (same size as frame)
+        private Mat? _drivableMaskOrig; // 0/255, same size as frame
         private LaneAnalysisResult? _last;
 
         public void SetDrivableMask(Mat? drivableMaskOrig)
@@ -79,7 +85,6 @@ namespace WpfApp1.Scripts
             Mat lp = laneProb;
             Mat? resized = null;
 
-            // ensure laneProb matches frame size
             if (laneProb.Width != frameSize.Width || laneProb.Height != frameSize.Height)
             {
                 resized = new Mat();
@@ -89,7 +94,6 @@ namespace WpfApp1.Scripts
 
             try
             {
-                // ensure float32 1ch
                 using var lp32 = new Mat();
                 if (lp.Type() == MatType.CV_32FC1 || lp.Type() == MatType.CV_32F)
                     lp.CopyTo(lp32);
@@ -105,12 +109,12 @@ namespace WpfApp1.Scripts
                 _last?.DisposeMats();
                 _last = AnalyzeCore(lp32, frameSize.Width, frameSize.Height);
 
-                // keep LaneBoundaries list (frame coords) for any other code
                 _laneBoundaries.Clear();
                 if (_last.BoundaryPolylinesFrame != null)
                     _laneBoundaries.AddRange(_last.BoundaryPolylinesFrame);
 
-                return _last.Boundaries != null && _last.Boundaries.Count == Math.Clamp(TotalLanes, 2, 8) + 1;
+                int total = Math.Clamp(TotalLanes, 2, 8);
+                return _last.Boundaries != null && _last.Boundaries.Count == total + 1;
             }
             catch
             {
@@ -134,15 +138,20 @@ namespace WpfApp1.Scripts
 
             var r = _last;
 
+            // ROI box
             Cv2.Rectangle(frame, r.Roi, Scalar.White, 1);
 
+            // Debug candidate polylines
             if (DebugDrawCandidatePolylines && r.CandidatePolylinesFrame != null)
             {
                 foreach (var pl in r.CandidatePolylinesFrame)
-                    if (pl != null && pl.Length >= 2)
-                        Cv2.Polylines(frame, new[] { pl }, false, new Scalar(0, 0, 255), 1, LineTypes.AntiAlias);
+                {
+                    if (pl == null || pl.Length < 2) continue;
+                    Cv2.Polylines(frame, new[] { pl }, false, new Scalar(0, 0, 255), 1, LineTypes.AntiAlias);
+                }
             }
 
+            // VP debug
             if (DebugDrawVanishingPoint)
             {
                 var vpF = new Point((int)Math.Round(r.Roi.X + r.VanishingPointRoi.X),
@@ -152,6 +161,7 @@ namespace WpfApp1.Scripts
                     HersheyFonts.HersheySimplex, 0.6, new Scalar(255, 0, 255), 2);
             }
 
+            // Draw boundaries
             if (r.BoundaryPolylinesFrame != null)
             {
                 foreach (var pl in r.BoundaryPolylinesFrame)
@@ -161,7 +171,7 @@ namespace WpfApp1.Scripts
                 }
             }
 
-            // lane labels
+            // lane labels (#1..#N)
             int total = Math.Clamp(TotalLanes, 2, 8);
             int yLabelR = (int)(r.Roi.Height * 0.92);
             yLabelR = Math.Clamp(yLabelR, 0, r.Roi.Height - 1);
@@ -175,6 +185,7 @@ namespace WpfApp1.Scripts
 
                     double xL = L.m * yLabelR + L.b;
                     double xR = R.m * yLabelR + R.b;
+
                     int cx = (int)Math.Round((xL + xR) * 0.5);
                     cx = Math.Clamp(cx, 0, r.Roi.Width - 1);
 
@@ -214,22 +225,21 @@ namespace WpfApp1.Scripts
 
             int idx = 0;
             while (idx < xs.Length && xR >= xs[idx]) idx++;
-
             return Math.Clamp(idx, 1, total);
         }
 
         // =========================
-        // Core result (internal)
+        // Core result
         // =========================
         private sealed class LaneAnalysisResult
         {
             public Rect Roi;
             public int[] SampleYs = Array.Empty<int>();
 
-            // boundary lines in ROI coords: x = m*y + b  (count=TotalLanes+1)
+            // boundary lines in ROI coords: x = m*y + b (count = TotalLanes+1)
             public List<(double m, double b)> Boundaries = new();
 
-            // drawing
+            // drawing polylines in FRAME coords
             public List<Point[]> BoundaryPolylinesFrame = new();
 
             // debug
@@ -247,7 +257,7 @@ namespace WpfApp1.Scripts
         }
 
         // =========================
-        // AnalyzeCore: Merge_Carmodel_Lane_Test style
+        // AnalyzeCore: VP 기반 + (겹침/교차 방지 + 최소폭)
         // =========================
         private LaneAnalysisResult AnalyzeCore(Mat laneProbOrig32f, int frameW, int frameH)
         {
@@ -295,11 +305,11 @@ namespace WpfApp1.Scripts
                 .Where(t => !double.IsNaN(t.line.m))
                 .ToList();
 
-            // yRef: near bottom
+            // yRef near bottom
             int yRef = (int)(roi.Height * 0.92);
             yRef = Math.Clamp(yRef, 0, roi.Height - 1);
 
-            // corridor (drivable) for laneW
+            // corridor (drivable) to estimate lane width
             GetCorridorLRAtRow(driveRoi8u, yRef, roi.Width, out int corL, out int corR);
             if (corR - corL < roi.Width * 0.35)
             {
@@ -316,6 +326,7 @@ namespace WpfApp1.Scripts
             int egoLeftIdx = ego - 1;
             int egoRightIdx = ego;
 
+            // expected boundary x at yRef (based on ego centered)
             double egoCenterBoundaryOffset = (ego - 0.5);
             double[] expectedX = new double[total + 1];
             for (int j = 0; j <= total; j++)
@@ -364,7 +375,6 @@ namespace WpfApp1.Scripts
             {
                 if (TryIntersect(egoL.Value, egoR.Value, out var inter))
                 {
-                    // keep VP above ROI and not too crazy
                     if (inter.Y < roi.Height * 0.2 && Math.Abs(inter.X - centerX) < roi.Width * 0.7)
                         vp = inter;
                 }
@@ -372,19 +382,14 @@ namespace WpfApp1.Scripts
 
             // build ideal boundary lines through VP and expected x at yRef
             var boundaries = new List<(double m, double b)>(total + 1);
-
             for (int j = 0; j <= total; j++)
             {
                 double xRef = expectedX[j];
-
-                // line passing through (xRef, yRef) and VP
-                // x = m*y + b
                 double dy = (yRef - vp.Y);
                 if (Math.Abs(dy) < 1e-6) dy = 1e-6;
 
                 double m = (xRef - vp.X) / dy;
                 double b = xRef - m * yRef;
-
                 boundaries.Add((m, b));
             }
 
@@ -392,7 +397,6 @@ namespace WpfApp1.Scripts
             int followWin = Math.Max(25, FollowWindowPx);
             for (int j = 0; j < boundaries.Count; j++)
             {
-                // already picked ego boundaries? prioritize keeping them
                 bool isEgoB = (j == egoLeftIdx && egoL.HasValue) || (j == egoRightIdx && egoR.HasValue);
                 if (isEgoB) continue;
 
@@ -408,36 +412,41 @@ namespace WpfApp1.Scripts
                 }
 
                 if (best >= 0 && bestDx <= followWin)
-                {
                     boundaries[j] = candLines[best].line;
-                }
             }
 
             // inject ego boundaries if found
             if (egoL.HasValue) boundaries[egoLeftIdx] = egoL.Value;
             if (egoR.HasValue) boundaries[egoRightIdx] = egoR.Value;
 
-            // enforce monotonic at yRef
-            var xsRef = boundaries.Select(b => b.m * yRef + b.b).ToArray();
-            for (int i = 1; i < xsRef.Length; i++)
+            // enforce monotonic at yRef (soft)
+            for (int i = 1; i < boundaries.Count; i++)
             {
-                if (xsRef[i] < xsRef[i - 1] + 6)
+                double prev = boundaries[i - 1].m * yRef + boundaries[i - 1].b;
+                double cur = boundaries[i].m * yRef + boundaries[i].b;
+                if (cur < prev + 6)
                 {
-                    double delta = (xsRef[i - 1] + 6) - xsRef[i];
-                    // shift by adjusting intercept b
+                    double delta = (prev + 6) - cur;
                     boundaries[i] = (boundaries[i].m, boundaries[i].b + delta);
-                    xsRef[i] += delta;
                 }
             }
 
-            // build draw polylines (frame coords) with clipping at crossings
-            var polylinesFrame = new List<Point[]>(total + 1);
+            // ===== Build polylines params
             int yTop = (int)(roi.Height * Math.Clamp(SampleYTopRatio, 0.05f, 0.8f));
             int yBot = (int)(roi.Height * Math.Clamp(SampleYBottomRatio, 0.6f, 0.99f));
             yTop = Math.Clamp(yTop, 0, roi.Height - 1);
             yBot = Math.Clamp(yBot, 0, roi.Height - 1);
             if (yBot <= yTop) { yTop = 0; yBot = roi.Height - 1; }
 
+            // =========================================================
+            // (요청 반영) HARD CONSTRAINT: 겹침/교차 방지 + 최소 폭 유지
+            // - 바닥(yBot) 기준으로 경계들을 단조 증가 + 최소 폭 강제
+            // - 같은 VP를 향하도록 재구성 => 모양 유지하면서 교차 제거
+            // =========================================================
+            EnforceNoCrossAndMinWidth(boundaries, vp, yBot, roi.Width, MinLaneWidthPx, MinBoundaryGapPx);
+
+            // build draw polylines (frame coords)
+            var polylinesFrame = new List<Point[]>(total + 1);
             for (int j = 0; j <= total; j++)
             {
                 var ln = boundaries[j];
@@ -454,7 +463,6 @@ namespace WpfApp1.Scripts
 
                     pts.Add(new Point(roi.X + (int)Math.Round(x), roi.Y + y));
                 }
-
                 polylinesFrame.Add(pts.ToArray());
             }
 
@@ -465,7 +473,9 @@ namespace WpfApp1.Scripts
                 SampleYs = sampleYs,
                 Boundaries = boundaries,
                 BoundaryPolylinesFrame = polylinesFrame,
-                CandidatePolylinesFrame = DebugDrawCandidatePolylines ? candidates.Select(pl => pl.Select(p => new Point(p.X + roi.X, p.Y + roi.Y)).ToArray()).ToList() : new List<Point[]>(),
+                CandidatePolylinesFrame = DebugDrawCandidatePolylines
+                    ? candidates.Select(pl => pl.Select(p => new Point(p.X + roi.X, p.Y + roi.Y)).ToArray()).ToList()
+                    : new List<Point[]>(),
                 VanishingPointRoi = vp,
                 LaneMaskRoi8u = laneMask.Clone(),
                 DriveMaskRoi8u = driveRoi8u
@@ -474,8 +484,86 @@ namespace WpfApp1.Scripts
             return res;
         }
 
+        // =========================================================
+        // HARD CONSTRAINT: No-cross + Min lane width 유지 (핵심)
+        // =========================================================
+        private static void EnforceNoCrossAndMinWidth(
+            List<(double m, double b)> boundaries,
+            Point2d vp, int yBot, int roiW,
+            int minLaneWidthPx, int minGapPx)
+        {
+            if (boundaries == null || boundaries.Count < 2) return;
+
+            int n = boundaries.Count;
+
+            // 1) 바닥(yBot)에서 x 샘플
+            double[] xb = new double[n];
+            for (int i = 0; i < n; i++)
+            {
+                xb[i] = boundaries[i].m * yBot + boundaries[i].b;
+                xb[i] = Math.Clamp(xb[i], 0, roiW - 1);
+            }
+
+            // 2) 최소 폭 / 최소 간격 강제
+            double minStep = Math.Max(minLaneWidthPx, minGapPx + 1);
+
+            xb[0] = Math.Clamp(xb[0], 0, roiW - 1);
+            for (int i = 1; i < n; i++)
+                xb[i] = Math.Max(xb[i], xb[i - 1] + minStep);
+
+            // 우측 overflow면 전체 shift
+            double overflow = xb[n - 1] - (roiW - 1);
+            if (overflow > 0)
+            {
+                for (int i = 0; i < n; i++) xb[i] -= overflow;
+
+                double under = 0 - xb[0];
+                if (under > 0)
+                    for (int i = 0; i < n; i++) xb[i] += under;
+            }
+
+            for (int i = 0; i < n; i++)
+                xb[i] = Math.Clamp(xb[i], 0, roiW - 1);
+
+            // 3) 동일 VP를 향하도록 재구성 (교차/겹침을 원천적으로 줄임)
+            for (int i = 0; i < n; i++)
+            {
+                double dy = (yBot - vp.Y);
+                if (Math.Abs(dy) < 1e-6) dy = 1e-6;
+
+                double m = (xb[i] - vp.X) / dy;
+                double b = xb[i] - m * yBot;
+                boundaries[i] = (m, b);
+            }
+
+            // 4) 여러 y에서 최종 단조/간격 보장 (안전장치)
+            int[] ys = new[]
+            {
+                (int)(yBot * 0.25),
+                (int)(yBot * 0.55),
+                (int)(yBot * 0.85),
+                yBot
+            };
+
+            foreach (int y in ys)
+            {
+                double prev = -1e9;
+                for (int i = 0; i < n; i++)
+                {
+                    double x = boundaries[i].m * y + boundaries[i].b;
+                    if (x < prev + minGapPx)
+                    {
+                        double delta = (prev + minGapPx) - x;
+                        boundaries[i] = (boundaries[i].m, boundaries[i].b + delta);
+                        x += delta;
+                    }
+                    prev = x;
+                }
+            }
+        }
+
         // =========================
-        // Build lane mask (fast)
+        // Build lane mask
         // =========================
         private Mat BuildLaneLineMaskFast(Mat laneProbRoi32f)
         {
@@ -539,9 +627,8 @@ namespace WpfApp1.Scripts
             int w = laneMask8u.Width;
             int h = laneMask8u.Height;
 
-            var polylines = new List<List<Point>>();
+            var seedPts = new List<Point>();
 
-            // For each y, find peaks in column sums in a band around y
             foreach (int y in sampleYs)
             {
                 int bandH = Math.Clamp(h / 18, 10, 28);
@@ -550,10 +637,8 @@ namespace WpfApp1.Scripts
                 if (y1 <= y0 + 1) continue;
 
                 using var band = new Mat(laneMask8u, new Rect(0, y0, w, y1 - y0));
-
                 int[] hist = ReduceColumnSumToInt(band);
 
-                // optional corridor from drive
                 int left = 0, right = w - 1;
                 if (driveMask8u != null && !driveMask8u.Empty())
                 {
@@ -563,21 +648,16 @@ namespace WpfApp1.Scripts
                 }
 
                 var peaks = FindPeaks(hist, left, right, maxPeaks: 10, minDistance: Math.Max(10, PeakMinGapPx));
-
-                // store as single-point "polyline candidates"; later we stitch by x proximity
                 foreach (int px in peaks)
-                {
-                    polylines.Add(new List<Point> { new Point(px, y) });
-                }
+                    seedPts.Add(new Point(px, y));
             }
 
-            // Stitch: group points by rough slope continuity (simple nearest by y order)
-            // We do a lightweight stitch: sort by y descending (bottom->top), then chain by nearest x
-            var groups = new List<List<Point>>();
-            var pts = polylines.SelectMany(g => g).ToList();
-            pts.Sort((a, b) => b.Y.CompareTo(a.Y)); // bottom first
+            // Stitch: bottom->top chain by nearest x
+            seedPts.Sort((a, b) => b.Y.CompareTo(a.Y));
 
-            foreach (var p in pts)
+            var groups = new List<List<Point>>();
+
+            foreach (var p in seedPts)
             {
                 List<Point>? best = null;
                 int bestDx = int.MaxValue;
@@ -585,7 +665,6 @@ namespace WpfApp1.Scripts
                 foreach (var g in groups)
                 {
                     var last = g[g.Count - 1];
-                    // allow only if going upward
                     if (p.Y >= last.Y) continue;
 
                     int dx = Math.Abs(p.X - last.X);
@@ -600,14 +679,13 @@ namespace WpfApp1.Scripts
                 else best.Add(p);
             }
 
-            // filter short
             groups = groups.Where(g => g.Count >= Math.Max(6, SampleBandCount / 3)).ToList();
-            // ensure each is bottom->top order
             foreach (var g in groups) g.Sort((a, b) => b.Y.CompareTo(a.Y));
 
             return groups;
         }
 
+        // unsafe 버전 (너는 /unsafe 켰으니 그대로 유지)
         private static int[] ReduceColumnSumToInt(Mat m8u)
         {
             int w = m8u.Width;
@@ -646,11 +724,14 @@ namespace WpfApp1.Scripts
             if (driveMaskRoi8u == null || driveMaskRoi8u.Empty()) return;
 
             yRef = Math.Clamp(yRef, 0, driveMaskRoi8u.Height - 1);
+
             unsafe
             {
                 byte* row = (byte*)driveMaskRoi8u.Ptr(yRef);
+
                 int l = 0;
                 while (l < w && row[l] == 0) l++;
+
                 int r = w - 1;
                 while (r >= 0 && row[r] == 0) r--;
 
@@ -674,13 +755,11 @@ namespace WpfApp1.Scripts
                     peaks.Add((x, v));
             }
 
-            // strong first
             peaks.Sort((a, b) => b.v.CompareTo(a.v));
 
             var picked = new List<int>();
             foreach (var p in peaks)
             {
-                if (p.v < 1) continue;
                 bool ok = true;
                 foreach (var q in picked)
                 {
@@ -699,7 +778,7 @@ namespace WpfApp1.Scripts
         {
             if (poly == null || poly.Count < 2) return (double.NaN, double.NaN);
 
-            // linear regression x = m*y + b
+            // linear regression: x = m*y + b
             double sumY = 0, sumX = 0, sumYY = 0, sumYX = 0;
             int n = poly.Count;
 
@@ -723,12 +802,11 @@ namespace WpfApp1.Scripts
 
         private static bool TryIntersect((double m, double b) L, (double m, double b) R, out Point2d inter)
         {
-            // x = m*y + b
-            // m1*y + b1 = m2*y + b2 => y = (b2-b1)/(m1-m2)
             inter = default;
             double den = (L.m - R.m);
             if (Math.Abs(den) < 1e-6) return false;
 
+            // m1*y + b1 = m2*y + b2 => y = (b2-b1)/(m1-m2)
             double y = (R.b - L.b) / den;
             double x = L.m * y + L.b;
             inter = new Point2d(x, y);
