@@ -42,6 +42,16 @@ namespace WpfApp1.Models
             UpdateClassLogic(classId);
         }
 
+        // CarModelData.Names 리스트에서 이름을 안전하게 가져오는 메서드
+        public string GetModelName()
+        {
+            if (LastClassId >= 0 && LastClassId < CarModelData.Names.Length)
+            {
+                return CarModelData.Names[LastClassId];
+            }
+            return ClassName ?? "Vehicle";
+        }
+
         private void UpdateClassLogic(int id)
         {
             _classHistory.Add(id);
@@ -75,10 +85,8 @@ namespace WpfApp1.Models
 
         public void Missed() => _missedFrames++;
 
-        // [수정] 지정차선 위반 판정 로직
         public string CheckViolation(int totalLanes)
         {
-            // 1. 승용차(2)는 과속만 체크
             if (LastClassId == 2)
             {
                 if (IsSpeeding)
@@ -89,13 +97,10 @@ namespace WpfApp1.Models
                 return "정상";
             }
 
-            // 2. 이미 위반 확정된 대형차량은 상태 유지
             if (HasViolationHistory) return ConfirmedViolationReason;
 
-            // 3. 트럭(7) 및 버스(5) 판정
             if (LastClassId == 7 || LastClassId == 5)
             {
-                // 현재 차선(CurrentLane)이 최하위 차선(TotalLanes)이 아닐 때만 위반
                 if (CurrentLane != -1 && CurrentLane < totalLanes)
                 {
                     HasViolationHistory = true;
@@ -103,7 +108,6 @@ namespace WpfApp1.Models
                 }
                 else
                 {
-                    // 최하위 차선에 있거나 차선이 아직 안 잡혔다면 정상
                     ConfirmedViolationReason = "정상";
                 }
             }

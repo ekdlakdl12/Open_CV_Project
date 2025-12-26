@@ -45,7 +45,6 @@ namespace WpfApp1.ViewModels
         private readonly LaneAnalyzer _laneAnalyzer = new();
         private volatile bool _laneOk = false;
 
-        // UI 콤보박스 및 라벨 연동 유지
         public ObservableCollection<int> TotalLaneOptions { get; } = new() { 1, 2, 3, 4, 5, 6 };
         public ObservableCollection<int> CurrentLaneOptions { get; } = new() { 1, 2, 3, 4, 5, 6 };
         public int TotalLanes { get; set; } = 5;
@@ -167,7 +166,8 @@ namespace WpfApp1.ViewModels
         private void UpdateRealtimeDb(TrackedObject track, string violation)
         {
             if (_dbCollection == null) return;
-            string vType = track.LastClassId switch { 2 => "CAR", 5 => "BUS", 7 => "TRUCK", _ => "Vehicle" };
+            // DB 저장 시 상세 모델명 사용
+            string vType = track.GetModelName();
             var filter = Builders<VehicleRecord>.Filter.Eq("TrackId", track.Id);
             var update = Builders<VehicleRecord>.Update
                 .Set("TrackId", track.Id)
@@ -192,10 +192,8 @@ namespace WpfApp1.ViewModels
                 if (_laneOk) _laneAnalyzer.DrawOnFrame(frame);
             }
 
-            // 상단 차선 정보 라벨 박스 유지
             Cv2.Rectangle(frame, new Rect(40, 40, 220, 80), Scalar.Black, -1);
             Cv2.PutText(frame, $"Lanes: {TotalLanes} / Ego: {CurrentLane}", new Point(50, 70), HersheyFonts.HersheySimplex, 0.5, Scalar.White, 1);
-
             Cv2.Line(frame, 0, (int)(frame.Height * BaseLineRatio), frame.Width, (int)(frame.Height * BaseLineRatio), Scalar.Red, 2);
 
             foreach (var det in detections)
@@ -204,9 +202,12 @@ namespace WpfApp1.ViewModels
                 {
                     if (!_trackedObjects.TryGetValue(det.TrackId, out var t)) continue;
                     Cv2.Rectangle(frame, det.Box, Scalar.Yellow, 2);
-                    string typeName = t.LastClassId switch { 2 => "CAR", 5 => "BUS", 7 => "TRUCK", _ => "Vehicle" };
-                    string l1 = $"[{t.FirstDetectedTime}] {typeName}";
-                    string l2 = $"{typeName} | {t.SpeedInKmh:F1}km/h | L{t.CurrentLane}";
+
+                    // 핵심 수정: CarModelData.Names 리스트에서 이름을 가져옴
+                    string detailModel = t.GetModelName();
+
+                    string l1 = $"[{t.FirstDetectedTime}] {detailModel}";
+                    string l2 = $"{detailModel} | {t.SpeedInKmh:F1}km/h | L{t.CurrentLane}";
 
                     Scalar bg = Scalar.Black;
                     if (t.LastClassId == 2) { if (t.IsSpeeding) bg = Scalar.Red; }
