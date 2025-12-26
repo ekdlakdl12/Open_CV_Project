@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using OpenCvSharp;
 
 namespace WpfApp1.Models
@@ -13,23 +15,43 @@ namespace WpfApp1.Models
         public int UpdateCount { get; set; }
         public double SpeedInKmh { get; private set; }
         public int CurrentLane { get; set; } = -1;
-        private int _lastLane = -1;
         public string Direction { get; set; } = "Unknown";
         public string ClassName { get; set; }
 
+        private List<int> _classHistory = new List<int>();
+        private const int HistoryLimit = 15;
+
+        public bool HasViolationHistory { get; private set; } = false;
+        public string ConfirmedViolationReason { get; private set; } = "정상";
+
+        public bool IsSpeeding => (LastClassId == 2 && SpeedInKmh > 120);
+
         private Point2f _lastPos;
         private int _missedFrames = 0;
-        public bool ShouldBeDeleted => _missedFrames > 10;
+        public bool ShouldBeDeleted => _missedFrames > 15;
 
         public TrackedObject(int classId, Rect box, double time, string className)
         {
-            Id = new Random().Next(10000, 99999);
-            LastClassId = classId;
+            Id = Guid.NewGuid().GetHashCode() & 0x7FFFFFFF;
             LastBox = box;
             LastTime = time;
             ClassName = className;
+            LastClassId = classId;
             FirstDetectedTime = DateTime.Now.ToString("HH:mm:ss");
             _lastPos = new Point2f(box.X + box.Width / 2, box.Y + box.Height / 2);
+            UpdateClassLogic(classId);
+        }
+
+        private void UpdateClassLogic(int id)
+        {
+            _classHistory.Add(id);
+            if (_classHistory.Count > HistoryLimit) _classHistory.RemoveAt(0);
+            if (_classHistory.Count >= 5)
+            {
+                var groups = _classHistory.GroupBy(x => x).OrderByDescending(g => g.Count());
+                LastClassId = groups.First().Key;
+            }
+            else LastClassId = id;
         }
 
         public void Update(int classId, Rect box, double time, int lane)
@@ -43,36 +65,49 @@ namespace WpfApp1.Models
                 SpeedInKmh = (SpeedInKmh * 0.8) + (speed * 0.2);
                 _lastPos = currPos;
             }
-
-            if (lane != -1) _lastLane = lane;
-            LastClassId = classId;
+            UpdateClassLogic(classId);
             LastBox = box;
             LastTime = time;
-            CurrentLane = lane;
+            if (lane != -1) CurrentLane = lane;
             UpdateCount++;
             _missedFrames = 0;
         }
 
         public void Missed() => _missedFrames++;
 
+        // [수정] 지정차선 위반 판정 로직
         public string CheckViolation(int totalLanes)
         {
-            string type = GetTypeName(LastClassId);
-            bool isLargeVehicle = (type == "TRUCK" || type == "BUS" || LastClassId == 7 || LastClassId == 5);
-
-            if (isLargeVehicle)
+            // 1. 승용차(2)는 과속만 체크
+            if (LastClassId == 2)
             {
-                // 오인식 상관없이 마지막 차선이 아니면 무조건 위반
-                if (CurrentLane != -1 && CurrentLane != totalLanes)
+                if (IsSpeeding)
                 {
-                    return $"지정차선 위반({totalLanes}차선 미준수)";
+                    ConfirmedViolationReason = "속도 위반(120km/h 초과)";
+                    return ConfirmedViolationReason;
                 }
+                return "정상";
             }
 
-            if (SpeedInKmh > 100.0) return "과속 위반";
-            return "정상";
-        }
+            // 2. 이미 위반 확정된 대형차량은 상태 유지
+            if (HasViolationHistory) return ConfirmedViolationReason;
 
-        private string GetTypeName(int id) => id switch { 2 => "CAR", 5 => "BUS", 7 => "TRUCK", _ => "Vehicle" };
+            // 3. 트럭(7) 및 버스(5) 판정
+            if (LastClassId == 7 || LastClassId == 5)
+            {
+                // 현재 차선(CurrentLane)이 최하위 차선(TotalLanes)이 아닐 때만 위반
+                if (CurrentLane != -1 && CurrentLane < totalLanes)
+                {
+                    HasViolationHistory = true;
+                    ConfirmedViolationReason = $"지정차선 위반({totalLanes}차선 미준수)";
+                }
+                else
+                {
+                    // 최하위 차선에 있거나 차선이 아직 안 잡혔다면 정상
+                    ConfirmedViolationReason = "정상";
+                }
+            }
+            return ConfirmedViolationReason;
+        }
     }
 }
