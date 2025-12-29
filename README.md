@@ -38,11 +38,10 @@
 | 구분 | 기술 스택 (Tech Stack) | 용도 |
 | :--- | :--- | :--- |
 | **주요 언어** | <img src="https://img.shields.io/badge/C%23-239120?style=flat-square&logo=c-sharp&logoColor=white"/> <img src="https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white"/> | UI/UX 통합 및 코어 알고리즘 구현 |
-| **백엔드** | <img src="https://img.shields.io/badge/Flask-000000?style=flat-square&logo=flask&logoColor=white"/> | 실시간 차선 인식 API 서버 구동 |
-| **딥러닝** | <img src="https://img.shields.io/badge/YOLO-00599C?style=flat-square&logo=yolo&logoColor=white"/> <img src="https://img.shields.io/badge/PyTorch-EE4C2C?style=flat-square&logo=pytorch&logoColor=white"/> | 객체 탐지 및 차선 분할 모델 추론 |
+| **딥러닝** | <img src="https://img.shields.io/badge/YOLO-00599C?style=flat-square&logo=yolo&logoColor=white"/> <img src="https://img.shields.io/badge/PyTorch-EE4C2C?style=flat-square&logo=pytorch&logoColor=white"/> | 객체 탐지 및 차선 분할 모델 , 차종 학습 모델 |
 | **이미지 처리** | <img src="https://img.shields.io/badge/OpenCV-5C3EE8?style=flat-square&logo=opencv&logoColor=white"/> | 영상 전처리, 원근 변환(Perspective), 추적 알고리즘 |
-| **데이터베이스** | <img src="https://img.shields.io/badge/MongoDB-47A248?style=flat-square&logo=mongodb&logoColor=white"/> | 차량 탐지 이력 및 법적 증거 메타데이터 관리 (NoSQL) |
-| **협업/디자인** | <img src="https://img.shields.io/badge/GitHub-181717?style=flat-square&logo=github&logoColor=white"/> <img src="https://img.shields.io/badge/Figma-F24E1E?style=flat-square&logo=figma&logoColor=white"/> | 소스 코드 버전 관리 및 시스템 UI 디자인 |
+| **데이터베이스** | <img src="https://img.shields.io/badge/MongoDB-47A248?style=flat-square&logo=mongodb&logoColor=white"/> | 차량 탐지 이력 및 법적 증거 메타데이터 관리 |
+| **협업/디자인** | <img src="https://img.shields.io/badge/GitHub-181717?style=flat-square&logo=github&logoColor=white"/> <img src="https://img.shields.io/badge/Figma-F24E1E?style=flat-square&logo=figma&logoColor=white"/> | 소스 코드 버전 관리 |
 
 ### 프로젝트 구조  
 
