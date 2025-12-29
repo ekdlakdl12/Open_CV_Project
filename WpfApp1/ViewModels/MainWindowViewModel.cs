@@ -130,7 +130,7 @@ namespace WpfApp1.ViewModels
                             lock (_detLock) { _currentDetections = dets.ToList(); }
                             foreach (var track in _trackedObjects.Values)
                             {
-                                // 지정차선 위반 로직 호출 (5차선 미준수 판단)
+                                // DB 저장 직전에 위반 상태를 최종 확정
                                 string violation = track.CheckViolation(this.TotalLanes);
                                 UpdateRealtimeDb(track, violation);
                             }
@@ -168,7 +168,6 @@ namespace WpfApp1.ViewModels
         {
             if (_dbCollection == null) return;
 
-            // 상세 모델명(CAR | Sonata 등) 사용
             string vType = track.GetModelName();
 
             var filter = Builders<VehicleRecord>.Filter.Eq("TrackId", track.Id);
@@ -178,6 +177,7 @@ namespace WpfApp1.ViewModels
                 .Set("ViolationReason", violation)
                 .Set("LaneNumber", track.CurrentLane)
                 .Set("VehicleType", vType)
+                .Set("Speed", Math.Round(track.SpeedInKmh, 1))
                 .SetOnInsert("FirstDetectedTime", track.FirstDetectedTime);
 
             Task.Run(async () => { try { await _dbCollection.UpdateOneAsync(filter, update, new UpdateOptions { IsUpsert = true }); } catch { } });
@@ -207,15 +207,12 @@ namespace WpfApp1.ViewModels
                     if (!_trackedObjects.TryGetValue(det.TrackId, out var t)) continue;
                     Cv2.Rectangle(frame, det.Box, Scalar.Yellow, 2);
 
-                    // 다시 GetModelName()으로 상세 차종 표시
                     string detailModel = t.GetModelName();
-
                     string l1 = $"[{t.FirstDetectedTime}] {detailModel}";
                     string l2 = $"{detailModel} | {t.SpeedInKmh:F1}km/h | L{t.CurrentLane}";
 
                     Scalar bg = Scalar.Black;
-                    if (t.LastClassId == 2) { if (t.IsSpeeding) bg = Scalar.Red; }
-                    else if (t.ConfirmedViolationReason != "정상") { bg = Scalar.Red; }
+                    if (t.ConfirmedViolationReason != "정상") bg = Scalar.Red;
 
                     DrawInfoText(frame, det.Box, l1, l2, bg);
                 }
