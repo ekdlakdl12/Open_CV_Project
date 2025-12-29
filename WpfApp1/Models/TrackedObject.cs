@@ -42,14 +42,16 @@ namespace WpfApp1.Models
             UpdateClassLogic(classId);
         }
 
-        // CarModelData.Names 리스트에서 이름을 안전하게 가져오는 메서드
+        // 차종(CAR/TRUCK)과 상세 모델명을 조합하여 반환
         public string GetModelName()
         {
+            string baseTag = LastClassId switch { 2 => "CAR", 5 => "BUS", 7 => "TRUCK", _ => "VEHICLE" };
+
             if (LastClassId >= 0 && LastClassId < CarModelData.Names.Length)
             {
-                return CarModelData.Names[LastClassId];
+                return $"{baseTag} | {CarModelData.Names[LastClassId]}";
             }
-            return ClassName ?? "Vehicle";
+            return $"{baseTag} | {ClassName ?? "Unknown"}";
         }
 
         private void UpdateClassLogic(int id)
@@ -87,28 +89,29 @@ namespace WpfApp1.Models
 
         public string CheckViolation(int totalLanes)
         {
+            // 1. 승용차(Id:2)는 무조건 정상
             if (LastClassId == 2)
             {
-                if (IsSpeeding)
-                {
-                    ConfirmedViolationReason = "속도 위반(120km/h 초과)";
-                    return ConfirmedViolationReason;
-                }
+                HasViolationHistory = false;
+                ConfirmedViolationReason = "정상";
                 return "정상";
             }
 
-            if (HasViolationHistory) return ConfirmedViolationReason;
-
+            // 2. 대형차(트럭/버스) 지정차선 위반 판단
             if (LastClassId == 7 || LastClassId == 5)
             {
-                if (CurrentLane != -1 && CurrentLane < totalLanes)
+                if (CurrentLane != -1)
                 {
-                    HasViolationHistory = true;
-                    ConfirmedViolationReason = $"지정차선 위반({totalLanes}차선 미준수)";
-                }
-                else
-                {
-                    ConfirmedViolationReason = "정상";
+                    // 현재 차선이 설정된 전체 차선수(마지막 차선)와 다르면 위반
+                    if (CurrentLane != totalLanes)
+                    {
+                        HasViolationHistory = true;
+                        ConfirmedViolationReason = $"지정차선 위반(대형차 {totalLanes}차선 미준수)";
+                    }
+                    else
+                    {
+                        ConfirmedViolationReason = "정상";
+                    }
                 }
             }
             return ConfirmedViolationReason;
