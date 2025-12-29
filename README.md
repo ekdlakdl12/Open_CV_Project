@@ -17,7 +17,8 @@
 | **최준영 (PM)** | **김준형** | **김진우** |
 | `팀장` | `팀원` | `팀원` |
 | [GitHub](https://github.com/ekdlakdl12/Open_CV_Project) | [GitHub](https://github.com/Kim-Junghyeong) | [GitHub](https://github.com/potoblue) |
-
+| **최준영 (PM)** | **김준형** | **김진우** |
+| `전방 좌우측 차량대수, 상대속도측정, DB` | `차선 감지 및 위반 판독, PPT, 발표` | `번호판 인식 기능` |
 ---
 
 ## ✨ 주요 기능 (Key Features)
