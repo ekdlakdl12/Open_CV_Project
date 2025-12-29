@@ -43,6 +43,8 @@
 | **데이터베이스** | <img src="https://img.shields.io/badge/MongoDB-47A248?style=flat-square&logo=mongodb&logoColor=white"/> | 차량 탐지 이력 및 법적 증거 메타데이터 관리 |
 | **협업/디자인** | <img src="https://img.shields.io/badge/GitHub-181717?style=flat-square&logo=github&logoColor=white"/> <img src="https://img.shields.io/badge/Figma-F24E1E?style=flat-square&logo=figma&logoColor=white"/> | 소스 코드 버전 관리 |
 
+---
+
 ### 프로젝트 구조  
 
 ```
@@ -86,4 +88,7 @@ WpfApp1
 └─ win_y_low/                # 실험 데이터 디렉토리
 
 ```
+
+---
+
 
