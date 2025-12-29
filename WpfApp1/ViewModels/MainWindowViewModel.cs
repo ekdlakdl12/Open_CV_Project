@@ -130,6 +130,7 @@ namespace WpfApp1.ViewModels
                             lock (_detLock) { _currentDetections = dets.ToList(); }
                             foreach (var track in _trackedObjects.Values)
                             {
+                                // 지정차선 위반 로직 호출 (5차선 미준수 판단)
                                 string violation = track.CheckViolation(this.TotalLanes);
                                 UpdateRealtimeDb(track, violation);
                             }
@@ -166,8 +167,10 @@ namespace WpfApp1.ViewModels
         private void UpdateRealtimeDb(TrackedObject track, string violation)
         {
             if (_dbCollection == null) return;
-            // DB 저장 시 상세 모델명 사용
+
+            // 상세 모델명(CAR | Sonata 등) 사용
             string vType = track.GetModelName();
+
             var filter = Builders<VehicleRecord>.Filter.Eq("TrackId", track.Id);
             var update = Builders<VehicleRecord>.Update
                 .Set("TrackId", track.Id)
@@ -176,6 +179,7 @@ namespace WpfApp1.ViewModels
                 .Set("LaneNumber", track.CurrentLane)
                 .Set("VehicleType", vType)
                 .SetOnInsert("FirstDetectedTime", track.FirstDetectedTime);
+
             Task.Run(async () => { try { await _dbCollection.UpdateOneAsync(filter, update, new UpdateOptions { IsUpsert = true }); } catch { } });
         }
 
@@ -203,7 +207,7 @@ namespace WpfApp1.ViewModels
                     if (!_trackedObjects.TryGetValue(det.TrackId, out var t)) continue;
                     Cv2.Rectangle(frame, det.Box, Scalar.Yellow, 2);
 
-                    // 핵심 수정: CarModelData.Names 리스트에서 이름을 가져옴
+                    // 다시 GetModelName()으로 상세 차종 표시
                     string detailModel = t.GetModelName();
 
                     string l1 = $"[{t.FirstDetectedTime}] {detailModel}";

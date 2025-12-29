@@ -1,4 +1,4 @@
-﻿namespace WpfApp1.Models
+﻿namespace WpfApp1.Scripts
 {
     public static class CarModelData
     {

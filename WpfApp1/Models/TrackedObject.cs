@@ -15,13 +15,11 @@ namespace WpfApp1.Models
         public int UpdateCount { get; set; }
         public double SpeedInKmh { get; private set; }
         public int CurrentLane { get; set; } = -1;
-        public string Direction { get; set; } = "Unknown";
         public string ClassName { get; set; }
 
         private List<int> _classHistory = new List<int>();
-        private const int HistoryLimit = 15;
+        private const int HistoryLimit = 20;
 
-        // 위반 이력을 저장하되, 현재 상태를 항상 우선 체크하도록 구성
         public bool HasViolationHistory { get; private set; } = false;
         public string ConfirmedViolationReason { get; private set; } = "정상";
 
@@ -29,7 +27,7 @@ namespace WpfApp1.Models
 
         private Point2f _lastPos;
         private int _missedFrames = 0;
-        public bool ShouldBeDeleted => _missedFrames > 15;
+        public bool ShouldBeDeleted => _missedFrames > 60;
 
         public TrackedObject(int classId, Rect box, double time, string className)
         {
@@ -43,13 +41,15 @@ namespace WpfApp1.Models
             UpdateClassLogic(classId);
         }
 
+        // [복구] 상세 모델명 반환 (보여주기용)
         public string GetModelName()
         {
             string baseTag = LastClassId switch { 2 => "CAR", 5 => "BUS", 7 => "TRUCK", _ => "VEHICLE" };
 
-            if (LastClassId >= 0 && LastClassId < CarModelData.Names.Length)
+            // CarModelData.Names에 정의된 상세 모델명을 baseTag 뒤에 붙임
+            if (LastClassId >= 0 && LastClassId < Scripts.CarModelData.Names.Length)
             {
-                return $"{baseTag} | {CarModelData.Names[LastClassId]}";
+                return $"{baseTag} | {Scripts.CarModelData.Names[LastClassId]}";
             }
             return $"{baseTag} | {ClassName ?? "Unknown"}";
         }
@@ -58,7 +58,8 @@ namespace WpfApp1.Models
         {
             _classHistory.Add(id);
             if (_classHistory.Count > HistoryLimit) _classHistory.RemoveAt(0);
-            if (_classHistory.Count >= 5)
+
+            if (_classHistory.Count >= 3)
             {
                 var groups = _classHistory.GroupBy(x => x).OrderByDescending(g => g.Count());
                 LastClassId = groups.First().Key;
@@ -89,7 +90,6 @@ namespace WpfApp1.Models
 
         public string CheckViolation(int totalLanes)
         {
-            // 1. 승용차(Id:2)는 무조건 정상 (이전 위반 기록이 있어도 현재 승용차로 판명되면 정상화)
             if (LastClassId == 2)
             {
                 HasViolationHistory = false;
@@ -97,21 +97,18 @@ namespace WpfApp1.Models
                 return "정상";
             }
 
-            // 2. 대형차(BUS:5, TRUCK:7) 판단
-            if (LastClassId == 7 || LastClassId == 5)
+            if ((LastClassId == 7 || LastClassId == 5) && UpdateCount > 3)
             {
-                // 차선 번호가 유효할 때만 판단
                 if (CurrentLane > 0)
                 {
-                    // 현재 차선이 설정된 마지막 차선(totalLanes)과 다르면 위반
-                    if (CurrentLane != totalLanes)
+                    if (CurrentLane < totalLanes)
                     {
                         HasViolationHistory = true;
                         ConfirmedViolationReason = $"지정차선 위반(대형차 {totalLanes}차선 미준수)";
                     }
                     else
                     {
-                        // 마지막 차선으로 잘 달리고 있다면 정상 (실시간 상태 반영)
+                        HasViolationHistory = false;
                         ConfirmedViolationReason = "정상";
                     }
                 }
