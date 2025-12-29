@@ -21,6 +21,7 @@ namespace WpfApp1.Models
         private List<int> _classHistory = new List<int>();
         private const int HistoryLimit = 15;
 
+        // 위반 이력을 저장하되, 현재 상태를 항상 우선 체크하도록 구성
         public bool HasViolationHistory { get; private set; } = false;
         public string ConfirmedViolationReason { get; private set; } = "정상";
 
@@ -42,7 +43,6 @@ namespace WpfApp1.Models
             UpdateClassLogic(classId);
         }
 
-        // 차종(CAR/TRUCK)과 상세 모델명을 조합하여 반환
         public string GetModelName()
         {
             string baseTag = LastClassId switch { 2 => "CAR", 5 => "BUS", 7 => "TRUCK", _ => "VEHICLE" };
@@ -89,7 +89,7 @@ namespace WpfApp1.Models
 
         public string CheckViolation(int totalLanes)
         {
-            // 1. 승용차(Id:2)는 무조건 정상
+            // 1. 승용차(Id:2)는 무조건 정상 (이전 위반 기록이 있어도 현재 승용차로 판명되면 정상화)
             if (LastClassId == 2)
             {
                 HasViolationHistory = false;
@@ -97,12 +97,13 @@ namespace WpfApp1.Models
                 return "정상";
             }
 
-            // 2. 대형차(트럭/버스) 지정차선 위반 판단
+            // 2. 대형차(BUS:5, TRUCK:7) 판단
             if (LastClassId == 7 || LastClassId == 5)
             {
-                if (CurrentLane != -1)
+                // 차선 번호가 유효할 때만 판단
+                if (CurrentLane > 0)
                 {
-                    // 현재 차선이 설정된 전체 차선수(마지막 차선)와 다르면 위반
+                    // 현재 차선이 설정된 마지막 차선(totalLanes)과 다르면 위반
                     if (CurrentLane != totalLanes)
                     {
                         HasViolationHistory = true;
@@ -110,6 +111,7 @@ namespace WpfApp1.Models
                     }
                     else
                     {
+                        // 마지막 차선으로 잘 달리고 있다면 정상 (실시간 상태 반영)
                         ConfirmedViolationReason = "정상";
                     }
                 }
