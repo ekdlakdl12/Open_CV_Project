@@ -2,12 +2,6 @@
   <img src="https://img.shields.io/badge/AI%20기반%20실시간%20차량%2F차선%20감지%20및%20분석%20시스템-24A19C?style=for-the-badge&logo=github&logoColor=white&labelColor=1F2328" alt="프로젝트명 배너" width="100%">
 </h1>
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Team-Error%20404:%20Sleep%20Not%20Found-E01E5A?style=for-the-badge&logo=visual-studio-code&logoColor=white"/>
-  <br>
-  <b>"끝없는 삽질로 완성도를 파고드는, 밤샘 개발자들의 집합"</b>
-</p>
-
 ## 📌 프로젝트 소개 (Project Introduction)
 
 **슬로건:** **고속도로의 평화 지키미.** (Police/Enforcement Support System)
