@@ -46,6 +46,7 @@
 
 ### 프로젝트 구조  
 
+```
 WpfApp1  
 ├─ Models  
 │  ├─ CarModelData.cs        # 차량 기본 정보 모델  
@@ -83,6 +84,7 @@ WpfApp1
 │
 ├─ PY_lane_server.py         # Python 기반 차선 인식 서버  
 ├─ Right/                   # 테스트용 리소스  
-└─ win_y_low/                # 실험 데이터 디렉토리  
-  
+└─ win_y_low/                # 실험 데이터 디렉토리
+
+```
 
