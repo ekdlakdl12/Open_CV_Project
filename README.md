@@ -90,52 +90,6 @@ WpfApp1
 └─ win_y_low/                # 실험 데이터 디렉토리
 
 ```
-
-
-### 프로젝트 구조  
-
-```
-WpfApp1  
-├─ Models  
-│  ├─ CarModelData.cs        # 차량 기본 정보 모델  
-│  ├─ Detection.cs           # YOLO 탐지 결과 데이터 구조  
-│  ├─ TrackedObject.cs       # 추적 중인 객체 정보  
-│  └─ VehicleRecord.cs       # 위반 차량 기록용 모델  
-│
-├─ Script
-│  ├─ LaneAnalyzer.cs        # 차선 인식 및 위반 판단 로직  
-│  ├─ YoloOnnx.cs            # YOLO ONNX 모델 로딩 및 추론  
-│  └─ YoloV8Onnx.cs          # YOLOv8 전용 추론 클래스  
-│
-├─ Scripts
-│  ├─ best.onnx              # 학습된 YOLO 모델  
-│  ├─ yolop-640-640.onnx     # 차선 인식용 모델  
-│  └─ yolov8n.onnx           # 경량 YOLOv8 모델  
-│
-├─ Services
-│  ├─ VideoPlayerService.cs  # 영상 재생 및 프레임 관리  
-│  ├─ YoloDetectService.cs   # YOLO 기반 객체 탐지 서비스  
-│  └─ YoloPDetectService.cs  # YOLOP 차선 인식 서비스  
-│
-├─ ViewModels
-│  ├─ MainViewModel.cs       # 메인 화면 상태 관리  
-│  ├─ MainWindowViewModel.cs # MainWindow 전용 ViewModel  
-│  ├─ RelayCommand.cs        # MVVM 커맨드 구현  
-│  └─ ViewModelBase.cs       # ViewModel 공통 베이스  
-│
-├─ Views
-│  ├─ MainWindow.xaml        # 메인 UI 화면  
-│  └─ MainWindow.xaml.cs     # UI 이벤트 코드 비하인드  
-│
-├─ App.xaml                  # WPF 애플리케이션 설정  
-├─ AssemblyInfo.cs  
-│
-├─ PY_lane_server.py         # Python 기반 차선 인식 서버  
-├─ Right/                   # 테스트용 리소스  
-└─ win_y_low/                # 실험 데이터 디렉토리
-
-```
-
 ---
 
 ## ✨ 사용한 NuGet 패키지
