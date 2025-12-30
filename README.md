@@ -94,10 +94,77 @@ WpfApp1
 ---
 
 ## ✨ 사용한 NuGet 패키지
-[NuGet 명세서 바로가기](https://docs.google.com/spreadsheets/d/1hhw3pMnT4UuUW-MDNwfc8PLnBW5Qk5wP7uosV7TMYpw/edit?gid=2004713425#gid=2004713425) |
+[NuGet 명세서 바로가기](https://docs.google.com/spreadsheets/d/1hhw3pMnT4UuUW-MDNwfc8PLnBW5Qk5wP7uosV7TMYpw/edit?gid=2004713425#gid=2004713425) 
 
 ## ✨ 프로젝트 일정표
-[프로젝트 일정표](https://docs.google.com/spreadsheets/d/1GLfk-Re6UQ8nnsiVm0ssotUfYDmXTo-F14aOCp_t6cc/edit?gid=1123180974#gid=1123180974) |
+[프로젝트 일정표](https://docs.google.com/spreadsheets/d/1GLfk-Re6UQ8nnsiVm0ssotUfYDmXTo-F14aOCp_t6cc/edit?gid=1123180974#gid=1123180974) 
+
+## ✨ 발생했던 이슈 정리
+[이슈 구분 | 기술 스택 (Tech Stack) | 용도 |
+| :--- | :--- | :--- |
+| **주요 언어** | <img src="https://img.shields.io/badge/C%23-239120?style=flat-square&logo=c-sharp&logoColor=white"/> <img src="https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white"/> | UI/UX 통합 및 코어 알고리즘 구현 |
+| **딥러닝** | <img src="https://img.shields.io/badge/YOLO-00599C?style=flat-square&logo=yolo&logoColor=white"/> <img src="https://img.shields.io/badge/PyTorch-EE4C2C?style=flat-square&logo=pytorch&logoColor=white"/> | 객체 탐지 및 차선 분할 모델 , 차종 학습 모델 |
+| **이미지 처리** | <img src="https://img.shields.io/badge/OpenCV-5C3EE8?style=flat-square&logo=opencv&logoColor=white"/> | 영상 전처리, 원근 변환(Perspective), 추적 알고리즘 |
+| **데이터베이스** | <img src="https://img.shields.io/badge/MongoDB-47A248?style=flat-square&logo=mongodb&logoColor=white"/> | 차량 탐지 이력 및 법적 증거 메타데이터 관리 |
+| **협업** | <img src="https://img.shields.io/badge/GitHub-181717?style=flat-square&logo=github&logoColor=white"/> | 소스 코드 버전 관리 |
+
+
+---
+
+### 프로젝트 구조  
+
+```
+WpfApp1  
+├─ Models  
+│  ├─ CarModelData.cs        # 차량 기본 정보 모델  
+│  ├─ Detection.cs           # YOLO 탐지 결과 데이터 구조  
+│  ├─ TrackedObject.cs       # 추적 중인 객체 정보  
+│  └─ VehicleRecord.cs       # 위반 차량 기록용 모델  
+│
+├─ Script
+│  ├─ LaneAnalyzer.cs        # 차선 인식 및 위반 판단 로직  
+│  ├─ YoloOnnx.cs            # YOLO ONNX 모델 로딩 및 추론  
+│  └─ YoloV8Onnx.cs          # YOLOv8 전용 추론 클래스  
+│
+├─ Scripts
+│  ├─ best.onnx              # 학습된 YOLO 모델  
+│  ├─ yolop-640-640.onnx     # 차선 인식용 모델  
+│  └─ yolov8n.onnx           # 경량 YOLOv8 모델  
+│
+├─ Services
+│  ├─ VideoPlayerService.cs  # 영상 재생 및 프레임 관리  
+│  ├─ YoloDetectService.cs   # YOLO 기반 객체 탐지 서비스  
+│  └─ YoloPDetectService.cs  # YOLOP 차선 인식 서비스  
+│
+├─ ViewModels
+│  ├─ MainViewModel.cs       # 메인 화면 상태 관리  
+│  ├─ MainWindowViewModel.cs # MainWindow 전용 ViewModel  
+│  ├─ RelayCommand.cs        # MVVM 커맨드 구현  
+│  └─ ViewModelBase.cs       # ViewModel 공통 베이스  
+│
+├─ Views
+│  ├─ MainWindow.xaml        # 메인 UI 화면  
+│  └─ MainWindow.xaml.cs     # UI 이벤트 코드 비하인드  
+│
+├─ App.xaml                  # WPF 애플리케이션 설정  
+├─ AssemblyInfo.cs  
+│
+├─ PY_lane_server.py         # Python 기반 차선 인식 서버  
+├─ Right/                   # 테스트용 리소스  
+└─ win_y_low/                # 실험 데이터 디렉토리
+
+```
+
+---
+
+## ✨ 사용한 NuGet 패키지
+[NuGet 명세서 바로가기](https://docs.google.com/spreadsheets/d/1hhw3pMnT4UuUW-MDNwfc8PLnBW5Qk5wP7uosV7TMYpw/edit?gid=2004713425#gid=2004713425) 
+
+## ✨ 프로젝트 일정표
+[프로젝트 일정표](https://docs.google.com/spreadsheets/d/1GLfk-Re6UQ8nnsiVm0ssotUfYDmXTo-F14aOCp_t6cc/edit?gid=1123180974#gid=1123180974) 
+
+## ✨ 발생했던 이슈 정리
+[issue](https://docs.google.com/spreadsheets/d/1GLfk-Re6UQ8nnsiVm0ssotUfYDmXTo-F14aOCp_t6cc/edit?gid=1123180974#gid=1123180974) 
 
 ---
 
