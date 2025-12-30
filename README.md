@@ -92,7 +92,7 @@ WpfApp1
 
 ---
 ## ✨ 사용한 NuGet 패키지
-| ***NuGet*** | [Nuget 명세서 바로가기] (https://docs.google.com/spreadsheets/d/1hhw3pMnT4UuUW-MDNwfc8PLnBW5Qk5wP7uosV7TMYpw/edit?gid=2004713425#gid=2004713425) |
+| **NuGet** | [Nuget 명세서 바로가기](https://docs.google.com/spreadsheets/d/1hhw3pMnT4UuUW-MDNwfc8PLnBW5Qk5wP7uosV7TMYpw/edit?gid=2004713425#gid=2004713425) |
 ---
 
 
