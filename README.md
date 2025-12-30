@@ -89,7 +89,10 @@ WpfApp1
 └─ win_y_low/                # 실험 데이터 디렉토리
 
 ```
-| **사용 패키지** | [사용한 NuGet 패키지](https://docs.google.com/spreadsheets/d/1hhw3pMnT4UuUW-MDNwfc8PLnBW5Qk5wP7uosV7TMYpw/edit?gid=2004713425#gid=2004713425) |
+
+---
+## ✨ 사용한 NuGet 패키지
+| (https://docs.google.com/spreadsheets/d/1hhw3pMnT4UuUW-MDNwfc8PLnBW5Qk5wP7uosV7TMYpw/edit?gid=2004713425#gid=2004713425) |
 ---
 
 
