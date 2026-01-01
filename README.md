@@ -44,6 +44,7 @@
 | **데이터베이스** | <img src="https://img.shields.io/badge/MongoDB-47A248?style=flat-square&logo=mongodb&logoColor=white"/> | 차량 탐지 이력 및 법적 증거 메타데이터 관리 |
 | **협업** | <img src="https://img.shields.io/badge/GitHub-181717?style=flat-square&logo=github&logoColor=white"/> | 소스 코드 버전 관리 |
 
+
 ---
 
 ### 프로젝트 구조  
@@ -89,6 +90,16 @@ WpfApp1
 └─ win_y_low/                # 실험 데이터 디렉토리
 
 ```
+---
+
+## ✨ 사용한 NuGet 패키지
+[NuGet 명세서 바로가기](https://docs.google.com/spreadsheets/d/1hhw3pMnT4UuUW-MDNwfc8PLnBW5Qk5wP7uosV7TMYpw/edit?gid=2004713425#gid=2004713425) 
+
+## ✨ 프로젝트 일정표
+[프로젝트 일정표](https://docs.google.com/spreadsheets/d/1GLfk-Re6UQ8nnsiVm0ssotUfYDmXTo-F14aOCp_t6cc/edit?gid=1123180974#gid=1123180974) 
+
+## ✨ 발생했던 이슈 정리
+[issue](https://docs.google.com/spreadsheets/d/1GLfk-Re6UQ8nnsiVm0ssotUfYDmXTo-F14aOCp_t6cc/edit?gid=1123180974#gid=1123180974) 
 
 ---
 
