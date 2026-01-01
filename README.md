@@ -101,6 +101,11 @@ WpfApp1
 ## ✨ 발생했던 이슈 정리
 [issue](https://docs.google.com/spreadsheets/d/1aEBCMos3K2WiVfYiYnP1RT7b2Q9AzO9n2q2SfhDSc-g/edit?gid=1092058707#gid=1092058707) 
 
+## ⬇️ 프로젝트 발표 자료
+
+프로젝트 수행 결과에 대한 자세한 내용은 아래 프레젠테이션 파일에서 확인하실 수 있습니다.
+[PPT](https://docs.google.com/presentation/d/1donMYTBn_MQIsJevn8ZbCcyZYEkIlaKg4cn40CtKRQE/edit?slide=id.p1#slide=id.p1) 
+
 ---
 
 
