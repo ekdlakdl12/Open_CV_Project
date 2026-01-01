@@ -99,7 +99,7 @@ WpfApp1
 [프로젝트 일정표](https://docs.google.com/spreadsheets/d/1GLfk-Re6UQ8nnsiVm0ssotUfYDmXTo-F14aOCp_t6cc/edit?gid=1123180974#gid=1123180974) 
 
 ## ✨ 발생했던 이슈 정리
-[issue](https://docs.google.com/spreadsheets/d/1GLfk-Re6UQ8nnsiVm0ssotUfYDmXTo-F14aOCp_t6cc/edit?gid=1123180974#gid=1123180974) 
+[issue](https://docs.google.com/spreadsheets/d/1aEBCMos3K2WiVfYiYnP1RT7b2Q9AzO9n2q2SfhDSc-g/edit?gid=1092058707#gid=1092058707) 
 
 ---
 
