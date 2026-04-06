@@ -30,6 +30,16 @@
 | 3 | **속도 측정 및 위반 감지** | 실시간 차량 속도 계산 및 과속/저속 주행 위반 판독. |
 | 4 | **증거 메타데이터 관리** | 위반 차종, 시간, 속도, 번호판 정보를 DB에 정형화하여 기록. |
 
+### 🎬 실행 예시 (Execution Examples)
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/0be140e7-a120-4636-ad88-3fc0134d78bd" width="49%" alt="실시간 차량 및 차선 감지 화면" />
+  <img src="https://github.com/user-attachments/assets/f5cd3bfa-6a53-4c3e-b007-7ffda814fb67" width="49%" alt="번호판 식별 및 SR 결과 화면" />
+</p>
+<p align="center">
+  <em>좌: YOLO 기반 실시간 차량/차선 감지 및 속도 측정 | 우: 번호판 정밀 검출 및 인식 결과</em>
+</p>
+
 ---
 
 ## 🛠️ 기술 스택 (Tech Stack)
